@@ -36,6 +36,28 @@ class AgentControllerTests(unittest.TestCase):
         self.assertEqual(result["selectedStack"]["backend"], "Express")
         self.assertIn("authentication-ready", result["finalRequirements"])
 
+    def test_finalize_requirements_handles_nested_answer_values(self) -> None:
+        result = agent_controller.finalize_requirements(
+            "Build a starter app",
+            {
+                "database": {"value": "postgres"},
+                "backend_framework": {"label": "node"},
+                "deployment_target": ["docker"],
+            },
+            {
+                "language": "Python",
+                "frontend": "React",
+                "backend": "FastAPI",
+                "database": "SQLite",
+                "aiTools": "None",
+                "deployment": "Render",
+            },
+        )
+
+        self.assertEqual(result["selectedStack"]["database"], "PostgreSQL")
+        self.assertEqual(result["selectedStack"]["backend"], "Express")
+        self.assertEqual(result["selectedStack"]["deployment"], "Docker")
+
     def test_plan_project_structure_covers_full_stack(self) -> None:
         context = agent_controller._build_idea_context(
             "Build a customer portal",

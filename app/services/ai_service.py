@@ -1054,7 +1054,7 @@ def _is_yes_answer(value: str | None) -> bool:
 
 
 def normalize_agent_answer_value(question_id: str, value: Any) -> str:
-    text = str(value or "").strip()
+    text = coerce_text_value(value)
     if not text:
         return ""
 
@@ -1087,7 +1087,7 @@ def normalize_agent_answer_value(question_id: str, value: Any) -> str:
 
 
 def normalize_project_scope(value: Any) -> str:
-    text = str(value or "").strip()
+    text = coerce_text_value(value)
     if not text:
         return ""
     lowered = text.lower()
@@ -1289,7 +1289,7 @@ def normalize_stack_selection(selection: Any) -> dict[str, str]:
     data = selection if isinstance(selection, Mapping) else {}
     normalized: dict[str, str] = {}
     for field in STACK_FIELDS:
-        value = str(data.get(field) or STACK_DEFAULTS[field]).strip()
+        value = coerce_text_value(data.get(field)) or STACK_DEFAULTS[field]
         normalized[field] = value or STACK_DEFAULTS[field]
     return normalized
 
@@ -1464,6 +1464,7 @@ def determine_project_kind(
     selected_stack: dict[str, str],
     declared_type: Any = None,
 ) -> dict[str, Any]:
+    selected_stack = normalize_stack_selection(selected_stack)
     declared = str(declared_type or "").strip().lower()
     frontend = selected_stack.get("frontend", "None")
     backend = selected_stack.get("backend", "None")
@@ -3091,6 +3092,7 @@ def merge_file_entries(
 
 
 def build_chosen_stack(selected_stack: dict[str, str]) -> list[str]:
+    safe_stack = normalize_stack_selection(selected_stack)
     labels = {
         "language": "Language",
         "frontend": "Frontend",
@@ -3100,10 +3102,30 @@ def build_chosen_stack(selected_stack: dict[str, str]) -> list[str]:
         "deployment": "Deployment",
     }
     return [
-        f"{labels[field]}: {selected_stack[field]}"
+        f"{labels[field]}: {safe_stack[field]}"
         for field in STACK_FIELDS
-        if selected_stack.get(field) not in {"", "Auto"}
+        if safe_stack.get(field) not in {"", "Auto"}
     ]
+
+
+def coerce_text_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, Mapping):
+        for key in ("value", "label", "name", "id"):
+            nested = value.get(key)
+            if nested is not None:
+                coerced = coerce_text_value(nested)
+                if coerced:
+                    return coerced
+        flattened = [coerce_text_value(item) for item in value.values()]
+        return ", ".join(item for item in flattened if item).strip()
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        flattened = [coerce_text_value(item) for item in value]
+        return ", ".join(item for item in flattened if item).strip()
+    return str(value).strip()
 
 
 def clean_relative_path(value: Any) -> str:
