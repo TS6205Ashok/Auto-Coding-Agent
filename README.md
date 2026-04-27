@@ -102,6 +102,7 @@ For the free public version, you do **not** need cloud Ollama.
 - Fast Mode works without Ollama by using template fallback
 - Deep Mode attempts AI enrichment only if Ollama is reachable
 - If Ollama is unavailable, the app still returns a complete preview instead of failing
+- ZIP downloads still work from the generated fallback preview
 
 ### 4. Optional AI Configuration
 
@@ -121,7 +122,7 @@ Generated ZIPs:
 - do not include installed libraries
 - do not include `.venv`
 - do not include `node_modules`
-- do include dependency manifests, setup scripts, run scripts, starter code, and generated docs
+- do include generated source, config, dependency manifests, setup scripts, run scripts, and generated docs
 
 This keeps ZIP creation compatible with Hugging Face temporary storage.
 
