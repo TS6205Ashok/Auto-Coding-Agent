@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Project Agent</title>
+  <link rel="stylesheet" href="{{ request.url_for('static', path='/style.css') }}">
+</head>
+<body>
+  <main class="page-shell">
+    <section class="hero">
+      <p class="eyebrow">Project Agent</p>
+      <h1>Agent-guided project architecture for runnable starter apps.</h1>
+      <p class="hero-copy">
+        Describe your idea, let the agent identify missing architecture decisions,
+        review the recommended stack, then generate, validate, preview, and export.
+      </p>
+    </section>
+
+    <section class="panel compose-panel">
+      <div class="section-heading">
+        <div>
+          <p class="section-label">Idea Input</p>
+          <h2>Start with the product idea</h2>
+        </div>
+        <p class="section-note">The agent will ask only the questions that change architecture, dependencies, or required files.</p>
+      </div>
+
+      <label class="field-label" for="ideaInput">Describe what you want to build</label>
+      <textarea
+        id="ideaInput"
+        name="idea"
+        rows="8"
+        placeholder="Example:
+- Build a beginner-friendly expense tracker web app for small teams
+- Create an AI support dashboard and choose the best stack automatically
+- Generate a React + FastAPI starter for a customer portal with admin access"
+      ></textarea>
+
+      <div class="compose-grid">
+        <label class="select-field">
+          <span>Generation Mode</span>
+          <select id="generationModeSelect">
+            <option value="fast">Fast Mode</option>
+            <option value="deep">Deep Mode</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="action-row">
+        <button id="suggestButton" class="primary-button" type="button">Start Agent</button>
+        <button id="regenerateButton" class="secondary-button" type="button" disabled>Regenerate With Selected Stack</button>
+        <button id="confirmButton" class="success-button" type="button" disabled>Confirm And Create ZIP</button>
+        <button id="clearButton" class="ghost-button" type="button" disabled>Clear Preview</button>
+      </div>
+
+      <div id="statusMessage" class="status-message" hidden></div>
+    </section>
+
+    <section id="agentSection" class="panel agent-panel" hidden>
+      <div class="section-heading">
+        <div>
+          <p class="section-label">Agent Conversation</p>
+          <h2>Project Agent</h2>
+        </div>
+        <p class="section-note">The agent is guiding the architecture before generation.</p>
+      </div>
+
+      <div class="agent-bubble agent-intro">
+        <div class="agent-avatar">PA</div>
+        <div class="agent-copy">
+          <p class="agent-name">Project Agent</p>
+          <p id="agentUnderstandingText" class="text-block"></p>
+        </div>
+      </div>
+
+      <div class="agent-grid">
+        <article class="card">
+          <h3>Assumptions</h3>
+          <ul id="agentAssumptionsList" class="list-block"></ul>
+        </article>
+
+        <article class="card wide">
+          <h3>Suggested Stack</h3>
+          <ul id="agentSuggestedStackList" class="list-block"></ul>
+        </article>
+      </div>
+
+      <article class="card wide question-section">
+        <div class="agent-inline-heading">
+          <div>
+            <h3>Questions</h3>
+            <p class="section-note">Answer in your own words. If you leave it blank, the agent will suggest a default and explain why.</p>
+          </div>
+          <div class="question-actions">
+            <button id="continueButton" class="secondary-button" type="button" disabled>Next</button>
+            <button id="skipQuestionsButton" class="ghost-button" type="button" disabled>Skip All &amp; Use Suggested Defaults</button>
+          </div>
+        </div>
+        <div id="questionCards" class="question-cards"></div>
+      </article>
+
+      <article id="finalizeCard" class="card wide" hidden>
+        <h3>Finalized Requirements</h3>
+        <p id="finalizeSummaryText" class="text-block"></p>
+        <ul id="finalSelectedStackList" class="list-block"></ul>
+        <pre id="finalRequirementsText" class="final-requirements-block"></pre>
+        <button id="generateProjectButton" class="primary-button" type="button" disabled>Generate Project</button>
+      </article>
+
+      <details id="advancedStackSection" class="advanced-stack" hidden>
+        <summary>Advanced Stack Settings</summary>
+        <p class="section-note">You can still override the stack manually before generation or regeneration.</p>
+        <div class="stack-grid">
+          <label class="select-field">
+            <span>Language</span>
+            <select id="languageSelect"></select>
+          </label>
+          <label class="select-field">
+            <span>Frontend</span>
+            <select id="frontendSelect"></select>
+          </label>
+          <label class="select-field">
+            <span>Backend</span>
+            <select id="backendSelect"></select>
+          </label>
+          <label class="select-field">
+            <span>Database</span>
+            <select id="databaseSelect"></select>
+          </label>
+          <label class="select-field">
+            <span>AI / Tools</span>
+            <select id="aiToolsSelect"></select>
+          </label>
+          <label class="select-field">
+            <span>Deployment</span>
+            <select id="deploymentSelect"></select>
+          </label>
+        </div>
+      </details>
+    </section>
+
+    <section id="previewSection" class="panel preview-panel" hidden>
+      <div class="section-heading">
+        <div>
+          <p class="section-label">Preview</p>
+          <h2 id="projectNameHeading">Generated Project</h2>
+        </div>
+        <p class="section-note">The latest preview is used for ZIP creation.</p>
+      </div>
+
+      <div id="stackChips" class="stack-chip-row"></div>
+
+      <div class="preview-grid">
+        <article class="card wide">
+          <h3>Summary</h3>
+          <p id="summaryText" class="text-block"></p>
+        </article>
+
+        <article class="card">
+          <h3>Selected Stack</h3>
+          <ul id="selectedStackList" class="list-block"></ul>
+        </article>
+
+        <article class="card">
+          <h3>Chosen Stack Summary</h3>
+          <ul id="chosenStackList" class="list-block"></ul>
+        </article>
+
+        <article class="card">
+          <h3>Detected User Choices</h3>
+          <ul id="detectedChoicesList" class="list-block"></ul>
+        </article>
+
+        <article class="card">
+          <h3>Problem Statement</h3>
+          <p id="problemStatementText" class="text-block"></p>
+        </article>
+
+        <article class="card wide">
+          <h3>Architecture</h3>
+          <ul id="architectureList" class="list-block"></ul>
+        </article>
+
+        <article class="card wide">
+          <h3>Modules</h3>
+          <div id="modulesList" class="modules-list"></div>
+        </article>
+
+        <article class="card">
+          <h3>Package Requirements</h3>
+          <ul id="packageRequirementsList" class="list-block"></ul>
+        </article>
+
+        <article class="card">
+          <h3>Environment Variables</h3>
+          <ul id="envVariablesList" class="list-block"></ul>
+        </article>
+
+        <article class="card wide">
+          <h3>Required Inputs</h3>
+          <p class="required-inputs-copy">Fill these values in <code>.env</code> before running the project.</p>
+          <div class="required-inputs-table-wrap">
+            <table class="required-inputs-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Required</th>
+                  <th>Example</th>
+                  <th>Where To Add</th>
+                  <th>Purpose</th>
+                </tr>
+              </thead>
+              <tbody id="requiredInputsBody"></tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="card">
+          <h3>Install Commands</h3>
+          <ul id="installCommandsList" class="list-block command-list"></ul>
+        </article>
+
+        <article class="card">
+          <h3>Run Commands</h3>
+          <ul id="runCommandsList" class="list-block command-list"></ul>
+        </article>
+
+        <article class="card wide">
+          <h3>Assumptions</h3>
+          <ul id="assumptionsList" class="list-block"></ul>
+        </article>
+
+        <article class="card wide">
+          <h3>File Tree</h3>
+          <pre id="fileTreeBlock" class="code-block"></pre>
+        </article>
+
+        <article class="card wide">
+          <h3>Generated Files</h3>
+          <div id="filesList" class="files-list"></div>
+        </article>
+      </div>
+    </section>
+
+    <section id="downloadSection" class="panel download-panel" hidden>
+      <div class="section-heading">
+        <div>
+          <p class="section-label">Download</p>
+          <h2>ZIP Ready</h2>
+        </div>
+        <p class="section-note">Download the latest confirmed preview.</p>
+      </div>
+      <p id="downloadText" class="download-copy">Your generated project ZIP is ready.</p>
+      <a id="downloadLink" class="download-link" href="#" download>Download ZIP</a>
+    </section>
+  </main>
+
+  <script src="{{ request.url_for('static', path='/app.js') }}" defer></script>
+</body>
+</html>

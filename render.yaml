@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: project-agent
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: OLLAMA_MODEL
+        value: qwen2.5-coder
+      - key: OLLAMA_BASE_URL
+        sync: false

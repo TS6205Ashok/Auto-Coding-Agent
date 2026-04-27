@@ -1,0 +1,65 @@
+{
+  "name": "project-agent-vscode",
+  "displayName": "Project Agent",
+  "description": "Use Project Agent from VS Code to generate runnable starter projects in the current workspace.",
+  "version": "0.0.1",
+  "publisher": "local",
+  "private": true,
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:projectAgent.generateProject",
+    "onCommand:projectAgent.installDependencies",
+    "onCommand:projectAgent.runProject",
+    "onCommand:projectAgent.showRequiredInputs",
+    "onCommand:projectAgent.openReadme"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "projectAgent.generateProject",
+        "title": "Project Agent: Generate Project"
+      },
+      {
+        "command": "projectAgent.installDependencies",
+        "title": "Project Agent: Install Dependencies"
+      },
+      {
+        "command": "projectAgent.runProject",
+        "title": "Project Agent: Run Project"
+      },
+      {
+        "command": "projectAgent.showRequiredInputs",
+        "title": "Project Agent: Show Required Inputs"
+      },
+      {
+        "command": "projectAgent.openReadme",
+        "title": "Project Agent: Open README"
+      }
+    ],
+    "configuration": {
+      "title": "Project Agent",
+      "properties": {
+        "projectAgent.apiUrl": {
+          "type": "string",
+          "default": "http://localhost:8000",
+          "description": "Base URL for the Project Agent backend API."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.46",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.7.3"
+  }
+}

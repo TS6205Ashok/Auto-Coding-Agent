@@ -1,0 +1,895 @@
+const STACK_OPTIONS = {
+  language: ["Auto", "Python", "JavaScript", "TypeScript", "Java"],
+  frontend: ["Auto", "None", "HTML/CSS/JavaScript", "React", "Next.js", "Vue"],
+  backend: ["Auto", "None", "FastAPI", "Flask", "Express", "NestJS", "Spring Boot"],
+  database: ["Auto", "None", "SQLite", "PostgreSQL", "MySQL", "MongoDB"],
+  aiTools: ["Auto", "None", "Ollama", "OpenAI API", "LangChain"],
+  deployment: ["Auto", "None", "Render", "Railway", "Vercel", "Docker"],
+};
+
+const ideaInput = document.getElementById("ideaInput");
+const suggestButton = document.getElementById("suggestButton");
+const continueButton = document.getElementById("continueButton");
+const skipQuestionsButton = document.getElementById("skipQuestionsButton");
+const generateProjectButton = document.getElementById("generateProjectButton");
+const regenerateButton = document.getElementById("regenerateButton");
+const confirmButton = document.getElementById("confirmButton");
+const clearButton = document.getElementById("clearButton");
+const statusMessage = document.getElementById("statusMessage");
+const generationModeSelect = document.getElementById("generationModeSelect");
+
+const agentSection = document.getElementById("agentSection");
+const advancedStackSection = document.getElementById("advancedStackSection");
+const previewSection = document.getElementById("previewSection");
+const downloadSection = document.getElementById("downloadSection");
+
+const agentUnderstandingText = document.getElementById("agentUnderstandingText");
+const agentAssumptionsList = document.getElementById("agentAssumptionsList");
+const agentSuggestedStackList = document.getElementById("agentSuggestedStackList");
+const questionCards = document.getElementById("questionCards");
+const finalizeCard = document.getElementById("finalizeCard");
+const finalizeSummaryText = document.getElementById("finalizeSummaryText");
+const finalSelectedStackList = document.getElementById("finalSelectedStackList");
+const finalRequirementsText = document.getElementById("finalRequirementsText");
+
+const projectNameHeading = document.getElementById("projectNameHeading");
+const detectedChoicesList = document.getElementById("detectedChoicesList");
+const stackChips = document.getElementById("stackChips");
+const selectedStackList = document.getElementById("selectedStackList");
+const chosenStackList = document.getElementById("chosenStackList");
+const assumptionsList = document.getElementById("assumptionsList");
+const summaryText = document.getElementById("summaryText");
+const problemStatementText = document.getElementById("problemStatementText");
+const architectureList = document.getElementById("architectureList");
+const packageRequirementsList = document.getElementById("packageRequirementsList");
+const installCommandsList = document.getElementById("installCommandsList");
+const runCommandsList = document.getElementById("runCommandsList");
+const envVariablesList = document.getElementById("envVariablesList");
+const requiredInputsBody = document.getElementById("requiredInputsBody");
+const modulesList = document.getElementById("modulesList");
+const fileTreeBlock = document.getElementById("fileTreeBlock");
+const filesList = document.getElementById("filesList");
+const downloadText = document.getElementById("downloadText");
+const downloadLink = document.getElementById("downloadLink");
+
+const stackSelects = {
+  language: document.getElementById("languageSelect"),
+  frontend: document.getElementById("frontendSelect"),
+  backend: document.getElementById("backendSelect"),
+  database: document.getElementById("databaseSelect"),
+  aiTools: document.getElementById("aiToolsSelect"),
+  deployment: document.getElementById("deploymentSelect"),
+};
+
+let baseIdea = "";
+let agentAnalysis = null;
+let agentAnswers = {};
+let finalRequirements = "";
+let currentPreview = null;
+let selectedStack = getDefaultStackState();
+let currentQuestionIndex = 0;
+let currentQuestionDraft = "";
+let showingSuggestion = false;
+
+initializeStackSelectors();
+refreshUiState();
+
+suggestButton.addEventListener("click", handleStartAgent);
+continueButton.addEventListener("click", handleContinueAgent);
+skipQuestionsButton.addEventListener("click", handleSkipQuestions);
+generateProjectButton.addEventListener("click", handleGenerateProject);
+regenerateButton.addEventListener("click", handleRegenerate);
+confirmButton.addEventListener("click", handleConfirmZip);
+clearButton.addEventListener("click", resetAll);
+
+Object.values(stackSelects).forEach((select) => {
+  select.addEventListener("change", handleStackChange);
+});
+
+function initializeStackSelectors() {
+  Object.entries(stackSelects).forEach(([key, select]) => {
+    STACK_OPTIONS[key].forEach((option) => {
+      const optionElement = document.createElement("option");
+      optionElement.value = option;
+      optionElement.textContent = option;
+      select.appendChild(optionElement);
+    });
+  });
+  applySelectedStackToControls(getDefaultStackState());
+}
+
+function getDefaultStackState() {
+  return {
+    language: "Auto",
+    frontend: "Auto",
+    backend: "Auto",
+    database: "Auto",
+    aiTools: "Auto",
+    deployment: "Auto",
+  };
+}
+
+function getQuestionList() {
+  return Array.isArray(agentAnalysis?.questions) ? agentAnalysis.questions : [];
+}
+
+function getCurrentQuestion() {
+  const questions = getQuestionList();
+  return questions[currentQuestionIndex] || null;
+}
+
+function getStoredAnswer(questionId) {
+  return typeof agentAnswers[questionId] === "string" ? agentAnswers[questionId] : "";
+}
+
+function setQuestionDraft(value) {
+  currentQuestionDraft = String(value || "");
+}
+
+function resetQuestionFlow() {
+  currentQuestionIndex = 0;
+  currentQuestionDraft = "";
+  showingSuggestion = false;
+}
+
+function collectSelectedStack() {
+  return {
+    language: stackSelects.language.value,
+    frontend: stackSelects.frontend.value,
+    backend: stackSelects.backend.value,
+    database: stackSelects.database.value,
+    aiTools: stackSelects.aiTools.value,
+    deployment: stackSelects.deployment.value,
+  };
+}
+
+function applySelectedStackToControls(stack) {
+  const safeStack = stack || getDefaultStackState();
+  Object.entries(stackSelects).forEach(([key, select]) => {
+    select.value = safeStack[key] || "Auto";
+  });
+  selectedStack = collectSelectedStack();
+}
+
+function handleStackChange() {
+  selectedStack = collectSelectedStack();
+  refreshUiState();
+}
+
+function setStatus(message, type) {
+  statusMessage.hidden = false;
+  statusMessage.className = `status-message ${type}`;
+  statusMessage.textContent = message;
+}
+
+function clearStatus() {
+  statusMessage.hidden = true;
+  statusMessage.className = "status-message";
+  statusMessage.textContent = "";
+}
+
+function setBusy(isBusy, message = "Working...") {
+  suggestButton.disabled = isBusy;
+  continueButton.disabled = isBusy || !agentAnalysis;
+  skipQuestionsButton.disabled = isBusy || !agentAnalysis;
+  generateProjectButton.disabled = isBusy || !finalRequirements;
+  regenerateButton.disabled = isBusy || !currentPreview;
+  confirmButton.disabled = isBusy || !currentPreview;
+  clearButton.disabled = isBusy && !baseIdea && !currentPreview && !agentAnalysis;
+  generationModeSelect.disabled = isBusy;
+  Object.values(stackSelects).forEach((select) => {
+    select.disabled = isBusy || !agentAnalysis;
+  });
+  if (isBusy) {
+    setStatus(message, "loading");
+  }
+}
+
+function refreshUiState() {
+  continueButton.disabled = !agentAnalysis;
+  skipQuestionsButton.disabled = !agentAnalysis;
+  generateProjectButton.disabled = !finalRequirements;
+  regenerateButton.disabled = !currentPreview;
+  confirmButton.disabled = !currentPreview;
+  clearButton.disabled = !baseIdea && !currentPreview && !agentAnalysis;
+  Object.values(stackSelects).forEach((select) => {
+    select.disabled = !agentAnalysis;
+  });
+
+  const questions = getQuestionList();
+  const hasQuestionFlow = !!agentAnalysis && questions.length > 0 && !finalRequirements;
+  if (hasQuestionFlow) {
+    continueButton.disabled = showingSuggestion;
+    continueButton.textContent = currentQuestionIndex >= questions.length - 1 ? "Finish Questions" : "Next";
+  } else if (!!agentAnalysis && !finalRequirements) {
+    continueButton.textContent = "Continue";
+  } else {
+    continueButton.textContent = "Next";
+  }
+}
+
+async function handleStartAgent() {
+  const idea = ideaInput.value.trim();
+  if (!idea) {
+    setStatus("Please enter a project idea before starting the agent.", "error");
+    return;
+  }
+
+  baseIdea = idea;
+  currentPreview = null;
+  finalRequirements = "";
+  agentAnswers = {};
+  resetQuestionFlow();
+  previewSection.hidden = true;
+  downloadSection.hidden = true;
+  finalizeCard.hidden = true;
+  setBusy(true, "Analyzing your idea...");
+
+  try {
+    const payload = await requestAgentAnalysis(idea);
+    agentAnalysis = payload;
+    selectedStack = payload.suggestedStack || getDefaultStackState();
+    applySelectedStackToControls(selectedStack);
+    renderAgentAnalysis(payload);
+    agentSection.hidden = false;
+    advancedStackSection.hidden = false;
+    setStatus("The agent reviewed your idea. Answer the questions one by one or skip and use the suggested defaults.", "success");
+  } catch (error) {
+    agentAnalysis = null;
+    agentSection.hidden = true;
+    advancedStackSection.hidden = true;
+    setStatus(error.message || "Could not start the agent.", "error");
+  } finally {
+    clearBusyState();
+  }
+}
+
+async function handleContinueAgent() {
+  if (!baseIdea || !agentAnalysis) {
+    setStatus("Start the agent before continuing.", "error");
+    return;
+  }
+
+  const question = getCurrentQuestion();
+  if (!question) {
+    await finalizeConversationOnly();
+    return;
+  }
+
+  const typedAnswer = currentQuestionDraft.trim();
+  if (!typedAnswer) {
+    showingSuggestion = true;
+    renderQuestionFlow();
+    setStatus("No answer was entered. Review the suggested default or edit your answer.", "info");
+    return;
+  }
+
+  storeQuestionAnswer(question.id, typedAnswer);
+  moveToNextQuestion();
+}
+
+async function handleSkipQuestions() {
+  if (!baseIdea || !agentAnalysis) {
+    setStatus("Start the agent before skipping questions.", "error");
+    return;
+  }
+
+  downloadSection.hidden = true;
+  setBusy(true, "Generating project with suggested defaults...");
+
+  try {
+    await finalizeAgentConversation({ fillDefaults: true });
+    await generatePreviewFromCurrentState(
+      "Preview ready. Review the generated project, regenerate if needed, then confirm to create the ZIP.",
+    );
+  } catch (error) {
+    currentPreview = null;
+    previewSection.hidden = true;
+    setStatus(error.message || "Could not generate the project from the suggested defaults.", "error");
+  } finally {
+    clearBusyState();
+  }
+}
+
+async function handleGenerateProject() {
+  if (!baseIdea || !finalRequirements) {
+    setStatus("Finalize the agent conversation before generating the project.", "error");
+    return;
+  }
+
+  downloadSection.hidden = true;
+  setBusy(true, "Generating project preview...");
+
+  try {
+    await generatePreviewFromCurrentState(
+      "Preview ready. Review the generated project, regenerate if needed, then confirm to create the ZIP.",
+    );
+  } catch (error) {
+    currentPreview = null;
+    previewSection.hidden = true;
+    setStatus(error.message || "Could not generate the project preview.", "error");
+  } finally {
+    clearBusyState();
+  }
+}
+
+async function handleRegenerate() {
+  if (!baseIdea || !currentPreview) {
+    setStatus("Generate a preview before regenerating with the selected stack.", "error");
+    return;
+  }
+
+  downloadSection.hidden = true;
+  setBusy(true, "Generating project preview...");
+
+  try {
+    await generatePreviewFromCurrentState(
+      "Preview regenerated with the latest requirements and selected stack.",
+    );
+  } catch (error) {
+    setStatus(error.message || "Could not regenerate the preview.", "error");
+  } finally {
+    clearBusyState();
+  }
+}
+
+async function handleConfirmZip() {
+  if (!currentPreview) {
+    setStatus("Generate a preview before creating a ZIP.", "error");
+    return;
+  }
+
+  setBusy(true, "Creating ZIP from the latest accepted preview...");
+
+  try {
+    const response = await fetch("/api/zip", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        preview: currentPreview,
+      }),
+    });
+
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.detail || "Could not create the ZIP.");
+    }
+
+    downloadLink.href = payload.downloadUrl;
+    downloadLink.download = payload.filename;
+    downloadText.textContent = `Your generated project ZIP is ready: ${payload.filename}`;
+    downloadSection.hidden = false;
+    setStatus("ZIP created successfully. You can download it now.", "success");
+  } catch (error) {
+    setStatus(error.message || "Could not create the ZIP.", "error");
+  } finally {
+    clearBusyState();
+  }
+}
+
+async function requestAgentAnalysis(idea) {
+  const response = await fetch("/api/agent/analyze", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ idea }),
+  });
+
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload.detail || "Could not analyze the idea.");
+  }
+  return payload;
+}
+
+async function requestAgentFinalize(body) {
+  const response = await fetch("/api/agent/finalize", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload.detail || "Could not finalize the requirements.");
+  }
+  return payload;
+}
+
+async function requestPreview(body) {
+  const response = await fetch("/api/suggest", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      generationMode: generationModeSelect.value || "fast",
+      ...body,
+    }),
+  });
+
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload.detail || "Could not generate a preview.");
+  }
+  return payload;
+}
+
+function renderAgentAnalysis(analysis) {
+  agentUnderstandingText.textContent = analysis.understanding || "No understanding available.";
+  renderList(agentAssumptionsList, analysis.assumptions, "No assumptions recorded.");
+  renderStackSummary(agentSuggestedStackList, analysis.suggestedStack || getDefaultStackState());
+  resetQuestionFlow();
+  renderQuestionFlow();
+}
+
+function renderQuestionFlow() {
+  questionCards.replaceChildren();
+
+  const questions = getQuestionList();
+  if (questions.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "text-block";
+    empty.textContent = "No follow-up questions are needed. Continue to finalize the recommended stack or skip straight to generation.";
+    questionCards.appendChild(empty);
+    refreshUiState();
+    return;
+  }
+
+  const question = getCurrentQuestion();
+  if (!question) {
+    const completed = document.createElement("p");
+    completed.className = "text-block";
+    completed.textContent = "All important questions are complete. Continue to finalize your requirements.";
+    questionCards.appendChild(completed);
+    refreshUiState();
+    return;
+  }
+
+  if (!currentQuestionDraft && getStoredAnswer(question.id) && !showingSuggestion) {
+    setQuestionDraft(getStoredAnswer(question.id));
+  }
+
+  const card = document.createElement("article");
+  card.className = "question-card active-question-card";
+
+  const position = document.createElement("p");
+  position.className = "question-position";
+  position.textContent = `Question ${currentQuestionIndex + 1} of ${questions.length}`;
+
+  const title = document.createElement("h4");
+  title.textContent = question.question || "Question";
+
+  const reason = document.createElement("p");
+  reason.className = "question-reason";
+  reason.textContent = "Type your preference first. If you leave it blank, the agent will suggest a default and explain why.";
+
+  const inputLabel = document.createElement("label");
+  inputLabel.className = "field-label";
+  inputLabel.setAttribute("for", "activeQuestionInput");
+  inputLabel.textContent = "Your answer";
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.id = "activeQuestionInput";
+  input.className = "question-input";
+  input.placeholder = buildQuestionPlaceholder(question);
+  input.value = currentQuestionDraft;
+  input.addEventListener("input", (event) => {
+    setQuestionDraft(event.target.value);
+  });
+
+  card.append(position, title, reason, inputLabel, input);
+
+  if (Array.isArray(question.options) && question.options.length) {
+    const optionsHint = document.createElement("p");
+    optionsHint.className = "question-hint";
+    optionsHint.textContent = `Common choices: ${question.options.join(", ")}`;
+    card.appendChild(optionsHint);
+  }
+
+  if (showingSuggestion) {
+    const suggestionBlock = document.createElement("div");
+    suggestionBlock.className = "suggestion-block";
+
+    const suggestionTitle = document.createElement("p");
+    suggestionTitle.className = "suggestion-title";
+    suggestionTitle.textContent = `Suggested: ${question.default || "No default available"}`;
+
+    const suggestionReason = document.createElement("p");
+    suggestionReason.className = "suggestion-reason";
+    suggestionReason.textContent = question.reason || "This default keeps the starter simple and runnable.";
+
+    const suggestionActions = document.createElement("div");
+    suggestionActions.className = "question-actions";
+
+    const acceptButton = document.createElement("button");
+    acceptButton.type = "button";
+    acceptButton.className = "secondary-button";
+    acceptButton.textContent = "Accept Suggestion";
+    acceptButton.addEventListener("click", () => {
+      storeQuestionAnswer(question.id, question.default || "");
+      moveToNextQuestion();
+    });
+
+    const editButton = document.createElement("button");
+    editButton.type = "button";
+    editButton.className = "ghost-button";
+    editButton.textContent = "Edit Answer";
+    editButton.addEventListener("click", () => {
+      showingSuggestion = false;
+      renderQuestionFlow();
+      const inputElement = document.getElementById("activeQuestionInput");
+      inputElement?.focus();
+    });
+
+    suggestionActions.append(acceptButton, editButton);
+    suggestionBlock.append(suggestionTitle, suggestionReason, suggestionActions);
+    card.appendChild(suggestionBlock);
+  }
+
+  questionCards.appendChild(card);
+  refreshUiState();
+}
+
+function buildQuestionPlaceholder(question) {
+  if (Array.isArray(question.options) && question.options.length) {
+    return `Example: ${question.options[0]}`;
+  }
+  return "Type your answer or leave blank for a suggestion";
+}
+
+function storeQuestionAnswer(questionId, value) {
+  agentAnswers[questionId] = String(value || "").trim();
+}
+
+function moveToNextQuestion() {
+  showingSuggestion = false;
+  currentQuestionIndex += 1;
+  currentQuestionDraft = "";
+
+  if (currentQuestionIndex >= getQuestionList().length) {
+    renderQuestionFlow();
+    void finalizeConversationOnly();
+    return;
+  }
+
+  renderQuestionFlow();
+  clearStatus();
+}
+
+async function finalizeConversationOnly() {
+  setBusy(true, "Finalizing requirements...");
+
+  try {
+    await finalizeAgentConversation({ fillDefaults: false });
+    setStatus("Requirements finalized. Generate the project when you are ready.", "success");
+  } catch (error) {
+    setStatus(error.message || "Could not finalize the requirements.", "error");
+  } finally {
+    clearBusyState();
+  }
+}
+
+function buildAnswersPayload(fillDefaults) {
+  const answers = { ...agentAnswers };
+  if (!fillDefaults) {
+    return answers;
+  }
+
+  getQuestionList().forEach((question) => {
+    if (!answers[question.id]) {
+      answers[question.id] = question.default || "";
+    }
+  });
+  return answers;
+}
+
+function buildFinalizationSummary(finalizedStack, assumptions) {
+  const scope = [
+    finalizedStack.frontend && finalizedStack.frontend !== "None" ? finalizedStack.frontend : null,
+    finalizedStack.backend && finalizedStack.backend !== "None" ? finalizedStack.backend : null,
+  ].filter(Boolean).join(" + ");
+  const firstAssumption = Array.isArray(assumptions) && assumptions.length ? assumptions[0] : "";
+  return scope
+    ? `The starter is now aligned around ${scope}. ${firstAssumption}`.trim()
+    : `The starter requirements are finalized. ${firstAssumption}`.trim();
+}
+
+function renderFinalization(finalized) {
+  finalizeCard.hidden = false;
+  finalRequirementsText.textContent = finalized.finalRequirements || "No finalized requirements available.";
+  finalizeSummaryText.textContent = buildFinalizationSummary(
+    finalized.selectedStack || selectedStack,
+    finalized.assumptions || [],
+  );
+  renderStackSummary(finalSelectedStackList, finalized.selectedStack || selectedStack);
+  renderStackSummary(agentSuggestedStackList, finalized.selectedStack || selectedStack);
+  const mergedAssumptions = dedupeList([
+    ...(Array.isArray(agentAnalysis?.assumptions) ? agentAnalysis.assumptions : []),
+    ...(Array.isArray(finalized.assumptions) ? finalized.assumptions : []),
+  ]);
+  renderList(agentAssumptionsList, mergedAssumptions, "No assumptions recorded.");
+  refreshUiState();
+}
+
+function clearBusyState() {
+  suggestButton.disabled = false;
+  generationModeSelect.disabled = false;
+  refreshUiState();
+}
+
+async function finalizeAgentConversation({ fillDefaults }) {
+  const payload = await requestAgentFinalize({
+    idea: baseIdea,
+    answers: buildAnswersPayload(fillDefaults),
+    suggestedStack: collectSelectedStack(),
+  });
+  finalRequirements = payload.finalRequirements || "";
+  selectedStack = payload.selectedStack || selectedStack;
+  applySelectedStackToControls(selectedStack);
+  renderFinalization(payload);
+  return payload;
+}
+
+async function generatePreviewFromCurrentState(successMessage) {
+  selectedStack = collectSelectedStack();
+  const payload = await requestPreview({
+    idea: baseIdea,
+    selectedStack,
+    finalRequirements,
+  });
+  currentPreview = payload;
+  selectedStack = payload.selectedStack || selectedStack;
+  renderPreview(payload);
+  applySelectedStackToControls(selectedStack);
+  setStatus(successMessage, "success");
+  return payload;
+}
+
+function resetAll() {
+  baseIdea = "";
+  agentAnalysis = null;
+  agentAnswers = {};
+  finalRequirements = "";
+  currentPreview = null;
+  selectedStack = getDefaultStackState();
+  resetQuestionFlow();
+
+  ideaInput.value = "";
+  clearStatus();
+  applySelectedStackToControls(getDefaultStackState());
+  agentSection.hidden = true;
+  advancedStackSection.hidden = true;
+  advancedStackSection.open = false;
+  previewSection.hidden = true;
+  downloadSection.hidden = true;
+  finalizeCard.hidden = true;
+  generateProjectButton.disabled = true;
+  generationModeSelect.value = "fast";
+  generationModeSelect.disabled = false;
+  downloadLink.removeAttribute("href");
+  downloadLink.removeAttribute("download");
+  downloadText.textContent = "Your generated project ZIP is ready.";
+
+  agentUnderstandingText.textContent = "";
+  clearCollection(agentAssumptionsList);
+  clearCollection(agentSuggestedStackList);
+  questionCards.replaceChildren();
+  finalizeSummaryText.textContent = "";
+  clearCollection(finalSelectedStackList);
+  finalRequirementsText.textContent = "";
+
+  clearCollection(detectedChoicesList);
+  stackChips.replaceChildren();
+  clearCollection(selectedStackList);
+  clearCollection(chosenStackList);
+  clearCollection(assumptionsList);
+  clearCollection(architectureList);
+  clearCollection(packageRequirementsList);
+  clearCollection(installCommandsList);
+  clearCollection(runCommandsList);
+  clearCollection(envVariablesList);
+  requiredInputsBody.replaceChildren();
+  modulesList.replaceChildren();
+  filesList.replaceChildren();
+  fileTreeBlock.textContent = "";
+  summaryText.textContent = "";
+  problemStatementText.textContent = "";
+  projectNameHeading.textContent = "Generated Project";
+  refreshUiState();
+}
+
+function renderPreview(preview) {
+  previewSection.hidden = false;
+  projectNameHeading.textContent = preview.projectName || "Generated Project";
+  summaryText.textContent = preview.summary || "No summary available.";
+  problemStatementText.textContent = preview.problemStatement || "No problem statement available.";
+  fileTreeBlock.textContent = preview.fileTree || "No file tree available.";
+
+  renderList(detectedChoicesList, preview.detectedUserChoices, "No explicit user choices detected.");
+  renderStackChips(preview.selectedStack || getDefaultStackState());
+  renderStackSummary(selectedStackList, preview.selectedStack || getDefaultStackState());
+  renderList(chosenStackList, preview.chosenStack, "No chosen stack details available.");
+  renderList(assumptionsList, preview.assumptions, "No assumptions recorded.");
+  renderList(architectureList, preview.architecture, "No architecture details available.");
+  renderList(packageRequirementsList, preview.packageRequirements, "No package requirements available.");
+  renderList(installCommandsList, preview.installCommands, "No install commands available.");
+  renderList(runCommandsList, preview.runCommands, "No run commands available.");
+  renderRequiredInputs(preview.requiredInputs || []);
+  renderEnvVariables(preview.envVariables || []);
+  renderModules(preview.modules || []);
+  renderFiles(preview.files || []);
+}
+
+function renderStackChips(stack) {
+  stackChips.replaceChildren();
+  const featuredChips = [
+    ["language", "Language"],
+    ["frontend", "Frontend"],
+    ["backend", "Backend"],
+    ["database", "Database"],
+  ];
+
+  featuredChips.forEach(([key, label]) => {
+    const chip = document.createElement("span");
+    chip.className = "stack-chip";
+    chip.innerHTML = `<strong>${escapeHtml(label)}</strong> ${escapeHtml(stack[key] || "Auto")}`;
+    stackChips.appendChild(chip);
+  });
+}
+
+function renderList(element, items, fallback) {
+  clearCollection(element);
+  const safeItems = Array.isArray(items) && items.length ? items : [fallback];
+
+  safeItems.forEach((item) => {
+    const listItem = document.createElement("li");
+    listItem.textContent = item;
+    element.appendChild(listItem);
+  });
+}
+
+function renderStackSummary(element, stack) {
+  clearCollection(element);
+  const labels = {
+    language: "Language",
+    frontend: "Frontend",
+    backend: "Backend",
+    database: "Database",
+    aiTools: "AI / Tools",
+    deployment: "Deployment",
+  };
+
+  Object.entries(labels).forEach(([key, label]) => {
+    const listItem = document.createElement("li");
+    listItem.textContent = `${label}: ${stack[key] || "Auto"}`;
+    element.appendChild(listItem);
+  });
+}
+
+function renderEnvVariables(envVariables) {
+  clearCollection(envVariablesList);
+  if (!Array.isArray(envVariables) || envVariables.length === 0) {
+    renderList(envVariablesList, [], "No environment variables required.");
+    return;
+  }
+
+  envVariables.forEach((variable) => {
+    const listItem = document.createElement("li");
+    const description = variable.description ? ` - ${variable.description}` : "";
+    const value = variable.value ? ` = ${variable.value}` : "";
+    listItem.textContent = `${variable.name}${value}${description}`;
+    envVariablesList.appendChild(listItem);
+  });
+}
+
+function renderRequiredInputs(requiredInputs) {
+  requiredInputsBody.replaceChildren();
+  if (!Array.isArray(requiredInputs) || requiredInputs.length === 0) {
+    const row = document.createElement("tr");
+    row.innerHTML = `
+      <td colspan="5">No required inputs detected. Copy <code>.env.example</code> to <code>.env</code> if you want to override defaults later.</td>
+    `;
+    requiredInputsBody.appendChild(row);
+    return;
+  }
+
+  requiredInputs.forEach((item) => {
+    const row = document.createElement("tr");
+    row.innerHTML = `
+      <td><code>${escapeHtml(item.name || "")}</code></td>
+      <td>${item.required === false ? "Optional" : "Required"}</td>
+      <td><code>${escapeHtml(item.example || "") || "-"}</code></td>
+      <td>${escapeHtml(item.whereToAdd || ".env")}</td>
+      <td>${escapeHtml(item.purpose || "No purpose provided.")}</td>
+    `;
+    requiredInputsBody.appendChild(row);
+  });
+}
+
+function renderModules(modules) {
+  modulesList.replaceChildren();
+  if (!Array.isArray(modules) || modules.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "text-block";
+    empty.textContent = "No modules available.";
+    modulesList.appendChild(empty);
+    return;
+  }
+
+  modules.forEach((module) => {
+    const card = document.createElement("article");
+    card.className = "module-card";
+
+    const title = document.createElement("h4");
+    title.textContent = module.name || "Unnamed module";
+
+    const purpose = document.createElement("p");
+    purpose.textContent = module.purpose || "No purpose provided.";
+
+    const keyFiles = document.createElement("p");
+    keyFiles.className = "key-files";
+    const files = Array.isArray(module.keyFiles) && module.keyFiles.length
+      ? module.keyFiles.join(", ")
+      : "No key files provided.";
+    keyFiles.textContent = `Key files: ${files}`;
+
+    card.append(title, purpose, keyFiles);
+    modulesList.appendChild(card);
+  });
+}
+
+function renderFiles(files) {
+  filesList.replaceChildren();
+  if (!Array.isArray(files) || files.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "text-block";
+    empty.textContent = "No starter files were generated.";
+    filesList.appendChild(empty);
+    return;
+  }
+
+  files.forEach((file) => {
+    const entry = document.createElement("details");
+    entry.className = "file-entry";
+
+    const summary = document.createElement("summary");
+    summary.innerHTML = `
+      <span class="file-entry-header">
+        <span class="file-entry-dots"><span></span><span></span><span></span></span>
+        <span class="file-entry-path">${escapeHtml(file.path || "Unnamed file")}</span>
+      </span>
+      <span class="file-entry-tag">Source</span>
+    `;
+
+    const code = document.createElement("pre");
+    code.className = "code-block";
+    code.textContent = file.content || "";
+
+    entry.append(summary, code);
+    filesList.appendChild(entry);
+  });
+}
+
+function clearCollection(element) {
+  element.replaceChildren();
+}
+
+function dedupeList(items) {
+  return [...new Set((items || []).filter(Boolean))];
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
