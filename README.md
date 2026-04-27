@@ -33,6 +33,19 @@ The app depends on:
 
 ## Run Locally
 
+One-command Windows start:
+
+```powershell
+.\run.bat
+```
+
+Manual setup:
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+```
+
 Install dependencies:
 
 ```bash

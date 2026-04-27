@@ -188,21 +188,21 @@ def build_required_docs(
         [
             "# Setup Instructions",
             "",
-            "## Normal Setup",
-            "1. Review `README.md`, `PROJECT_EXPLANATION.md`, and `FILE_STRUCTURE.md` first.",
-            "2. Review `PACKAGE_REQUIREMENTS.md` and `REQUIRED_INPUTS.md` before installing dependencies.",
-            "3. Copy `.env.example` to `.env` and fill the required values.",
+            "## Quick Start",
+            "1. Run `run.bat` on Windows or `./run.sh` on Mac/Linux.",
+            "2. Enter any missing required inputs when the app prompts for them at runtime.",
+            "3. The application will finish startup automatically after dependencies install and required values are provided.",
             "",
             "## Windows",
-            "1. Fill `.env` from `.env.example`.",
-            "2. Run `setup.bat`.",
-            "3. Run `run.bat`.",
+            "1. Run `run.bat`.",
+            "2. If `.env` is missing, the script will create it from `.env.example` automatically.",
+            "3. If a required backend value is still missing, enter it when prompted in the terminal.",
             "",
             "## Mac/Linux",
-            "1. Fill `.env` from `.env.example`.",
-            "2. Run `chmod +x setup.sh run.sh`.",
-            "3. Run `./setup.sh`.",
-            "4. Run `./run.sh`.",
+            "1. Run `chmod +x setup.sh run.sh` once if the scripts are not executable.",
+            "2. Run `./run.sh`.",
+            "3. If `.env` is missing, the script will create it from `.env.example` automatically.",
+            "4. If a required backend value is still missing, enter it when prompted in the terminal.",
             "",
             "## Setup Scripts",
             "- Windows: `setup.bat`",
@@ -507,10 +507,18 @@ def finalize_preview_files(
     project_name: str,
     selected_stack: Mapping[str, Any],
     project_kind: Mapping[str, Any],
+    required_inputs: Sequence[Mapping[str, Any]] | None = None,
+    template_family: str = "",
     custom_manifest: Sequence[Mapping[str, Any]] | None = None,
     raw_files: Any = None,
 ) -> list[dict[str, str]]:
-    standard_files = _build_standard_files(project_name, selected_stack, project_kind)
+    standard_files = _build_standard_files(
+        project_name,
+        selected_stack,
+        project_kind,
+        required_inputs=required_inputs,
+        template_family=template_family,
+    )
     custom_template_files = _build_custom_template_files(
         custom_manifest or [],
         project_name,
@@ -526,12 +534,16 @@ def finalize_preview_files(
         project_name,
         selected_stack,
         project_kind,
+        required_inputs=required_inputs,
+        template_family=template_family,
     )
     repaired_files = _repair_runtime_contract(
         completed_files,
         project_name,
         selected_stack,
         project_kind,
+        required_inputs=required_inputs,
+        template_family=template_family,
     )
     return validate_generated_files(repaired_files)
 
@@ -541,24 +553,61 @@ def build_preview_file_tree(
     *,
     include_env_example: bool,
 ) -> str:
-    doc_paths = [
-        "README.md",
-        "PROJECT_EXPLANATION.md",
-        "SETUP_INSTRUCTIONS.md",
-        "FILE_STRUCTURE.md",
-        "PACKAGE_REQUIREMENTS.md",
-        "REQUIRED_INPUTS.md",
-        ".env.example",
-    ]
     file_paths = [str(file_entry.get("path") or "").strip() for file_entry in files]
-    return build_file_tree_from_paths([path for path in file_paths if path] + doc_paths)
+    all_paths = [path for path in file_paths if path]
+    if include_env_example and ".env.example" not in all_paths:
+        all_paths.append(".env.example")
+    return build_file_tree_from_paths(all_paths)
+
+
+def assemble_complete_preview_files(
+    preview: Mapping[str, Any],
+    *,
+    selected_stack: Mapping[str, Any],
+    project_kind: Mapping[str, Any],
+) -> tuple[list[dict[str, str]], list[str]]:
+    base_files = validate_generated_files(_normalize_preview_files(preview.get("files")))
+    actual_paths = [entry["path"] for entry in base_files]
+    bundle_info = {
+        "actualFileTree": build_file_tree_from_paths(actual_paths + list(SYSTEM_FILENAMES)),
+    }
+    required_docs = build_required_docs(dict(preview), bundle_info)
+
+    merged = {entry["path"]: entry["content"] for entry in base_files}
+    injected_paths: list[str] = []
+    for doc_name, content in required_docs.items():
+        if not str(merged.get(doc_name, "")).strip():
+            injected_paths.append(doc_name)
+        merged[doc_name] = content
+
+    complete_files = validate_generated_files(
+        [{"path": path, "content": content} for path, content in merged.items()]
+    )
+    return complete_files, sorted(set(injected_paths))
+
+
+def required_preview_paths(
+    selected_stack: Mapping[str, Any],
+    project_kind: Mapping[str, Any],
+    template_family: str = "",
+) -> set[str]:
+    paths = set(_required_runtime_paths(selected_stack, project_kind, template_family=template_family))
+    paths.update(SYSTEM_FILENAMES)
+    return paths
 
 
 def _build_standard_files(
     project_name: str,
     selected_stack: Mapping[str, Any],
     project_kind: Mapping[str, Any],
+    *,
+    required_inputs: Sequence[Mapping[str, Any]] | None = None,
+    template_family: str = "",
 ) -> list[dict[str, str]]:
+    if template_family == "puzzle-game":
+        files = _build_puzzle_game_files(project_name)
+        return [{"path": path, "content": content} for path, content in files.items()]
+
     files: dict[str, str] = {}
     if project_kind["isFullStack"]:
         if project_kind["hasFrontend"]:
@@ -570,10 +619,17 @@ def _build_standard_files(
                 )
             )
         if project_kind["hasBackend"]:
-            files.update(_build_backend_files(selected_stack, project_name, "backend"))
+            files.update(
+                _build_backend_files(
+                    selected_stack,
+                    project_name,
+                    "backend",
+                    required_inputs=required_inputs,
+                )
+            )
         files.update(_build_root_scripts(selected_stack, project_kind))
     elif project_kind["hasBackend"]:
-        files.update(_build_backend_files(selected_stack, project_name, ""))
+        files.update(_build_backend_files(selected_stack, project_name, "", required_inputs=required_inputs))
         files.update(_build_root_scripts(selected_stack, project_kind))
     else:
         files.update(
@@ -745,22 +801,36 @@ def _ensure_minimum_project_files(
     project_name: str,
     selected_stack: Mapping[str, Any],
     project_kind: Mapping[str, Any],
+    *,
+    required_inputs: Sequence[Mapping[str, Any]] | None = None,
+    template_family: str = "",
 ) -> list[dict[str, str]]:
     merged = {str(entry["path"]): str(entry["content"]) for entry in files}
-    for path, content in _build_root_scripts(selected_stack, project_kind).items():
-        merged.setdefault(path, content)
+    if template_family == "puzzle-game":
+        for path, content in _build_puzzle_game_files(project_name).items():
+            merged.setdefault(path, content)
+    else:
+        for path, content in _build_root_scripts(selected_stack, project_kind).items():
+            merged.setdefault(path, content)
 
-    if project_kind["isFullStack"]:
+    if template_family == "puzzle-game":
+        minimum_files = 7
+    elif project_kind["isFullStack"]:
         for path, content in _build_frontend_files(
             str(selected_stack.get("frontend") or "React"),
             project_name,
             "frontend",
         ).items():
             merged.setdefault(path, content)
-        for path, content in _build_backend_files(selected_stack, project_name, "backend").items():
+        for path, content in _build_backend_files(
+            selected_stack,
+            project_name,
+            "backend",
+            required_inputs=required_inputs,
+        ).items():
             merged.setdefault(path, content)
     elif project_kind["hasBackend"]:
-        for path, content in _build_backend_files(selected_stack, project_name, "").items():
+        for path, content in _build_backend_files(selected_stack, project_name, "", required_inputs=required_inputs).items():
             merged.setdefault(path, content)
     else:
         for path, content in _build_frontend_files(
@@ -771,7 +841,7 @@ def _ensure_minimum_project_files(
             merged.setdefault(path, content)
 
     filler_index = 1
-    minimum_files = int(project_kind.get("minimumFiles") or 0)
+    minimum_files = max(minimum_files if template_family == "puzzle-game" else 0, int(project_kind.get("minimumFiles") or 0))
     while len(merged) < minimum_files:
         filler_path = f"notes/starter-note-{filler_index}.md"
         merged.setdefault(
@@ -788,19 +858,28 @@ def _repair_runtime_contract(
     project_name: str,
     selected_stack: Mapping[str, Any],
     project_kind: Mapping[str, Any],
+    *,
+    required_inputs: Sequence[Mapping[str, Any]] | None = None,
+    template_family: str = "",
 ) -> list[dict[str, str]]:
     standard_map = {
         item["path"]: item["content"]
-        for item in _build_standard_files(project_name, selected_stack, project_kind)
+        for item in _build_standard_files(
+            project_name,
+            selected_stack,
+            project_kind,
+            required_inputs=required_inputs,
+            template_family=template_family,
+        )
     }
     merged = {str(entry["path"]): str(entry["content"]) for entry in files}
 
-    for protected_path in _protected_runtime_paths(selected_stack, project_kind):
+    for protected_path in _protected_runtime_paths(selected_stack, project_kind, template_family=template_family):
         template_content = standard_map.get(protected_path)
         if template_content is not None:
             merged[protected_path] = template_content
 
-    for required_path in _required_runtime_paths(selected_stack, project_kind):
+    for required_path in _required_runtime_paths(selected_stack, project_kind, template_family=template_family):
         template_content = standard_map.get(required_path)
         if template_content is None:
             continue
@@ -822,7 +901,7 @@ def _repair_runtime_contract(
             continue
         merged[path] = standard_map.get(path) or _build_safe_fallback_content(path, project_name)
 
-    for package_json_path in _package_json_paths(selected_stack, project_kind):
+    for package_json_path in _package_json_paths(selected_stack, project_kind, template_family=template_family):
         if package_json_path not in merged or not _valid_package_json(
             merged[package_json_path],
             _expected_package_scripts(package_json_path, selected_stack, project_kind),
@@ -831,7 +910,7 @@ def _repair_runtime_contract(
             if template is not None:
                 merged[package_json_path] = template
 
-    for entry_path in _entry_validation_paths(selected_stack, project_kind):
+    for entry_path in _entry_validation_paths(selected_stack, project_kind, template_family=template_family):
         template = standard_map.get(entry_path)
         content = str(merged.get(entry_path, ""))
         if template is None:
@@ -849,7 +928,7 @@ def _repair_runtime_contract(
                 merged[endpoint_path] = template
 
     if project_kind["hasFrontend"]:
-        for page_path in _frontend_page_paths(selected_stack, project_kind):
+        for page_path in _frontend_page_paths(selected_stack, project_kind, template_family=template_family):
             template = standard_map.get(page_path)
             if template is None:
                 continue
@@ -863,15 +942,17 @@ def _build_backend_files(
     selected_stack: Mapping[str, Any],
     project_name: str,
     prefix: str,
+    *,
+    required_inputs: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, str]:
     backend = str(selected_stack.get("backend") or "FastAPI")
     if backend in {"FastAPI", "Flask"}:
-        return _build_fastapi_backend_files(project_name, prefix)
+        return _build_fastapi_backend_files(project_name, prefix, required_inputs=required_inputs)
     if backend in {"Express", "NestJS"}:
         return _build_express_backend_files(project_name, prefix)
     if backend == "Spring Boot":
         return _build_spring_backend_files(project_name, prefix)
-    return _build_fastapi_backend_files(project_name, prefix)
+    return _build_fastapi_backend_files(project_name, prefix, required_inputs=required_inputs)
 
 
 def _build_frontend_files(frontend: str, project_name: str, prefix: str) -> dict[str, str]:
@@ -880,9 +961,356 @@ def _build_frontend_files(frontend: str, project_name: str, prefix: str) -> dict
     return _build_vanilla_frontend_files(project_name, prefix)
 
 
-def _build_fastapi_backend_files(project_name: str, prefix: str) -> dict[str, str]:
-    app_prefix = _prefixed(prefix, "app")
+def _build_puzzle_game_files(project_name: str) -> dict[str, str]:
     return {
+        "index.html": f"""<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{project_name}</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="hero">
+        <p class="eyebrow">Project Agent Starter</p>
+        <h1>{project_name}</h1>
+        <p class="hero-copy">
+          Slide the numbered tiles into order. Click a tile next to the empty space to move it.
+        </p>
+      </section>
+
+      <section class="panel controls">
+        <button id="shuffleButton" type="button">Shuffle / Start</button>
+        <button id="resetButton" type="button">Reset</button>
+        <p id="moveCounter">Moves: 0</p>
+        <p id="statusMessage">Arrange the board in order from 1 to 8.</p>
+      </section>
+
+      <section class="panel board-panel">
+        <div id="puzzleBoard" class="puzzle-board" aria-label="Sliding puzzle board"></div>
+      </section>
+
+      <section class="panel instructions">
+        <h2>How to play</h2>
+        <ol>
+          <li>Click <strong>Shuffle / Start</strong> to scramble the board.</li>
+          <li>Move any tile touching the empty space.</li>
+          <li>Put the numbers back in order to win.</li>
+        </ol>
+      </section>
+    </main>
+    <script src="script.js"></script>
+  </body>
+</html>
+""",
+        "style.css": """:root {
+  font-family: "Segoe UI", Arial, sans-serif;
+  color: #10243b;
+  background: linear-gradient(180deg, #eef4ff 0%, #f8fbff 100%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+.app-shell {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 32px 20px 56px;
+}
+
+.hero,
+.panel {
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(16, 36, 59, 0.08);
+  border-radius: 22px;
+  box-shadow: 0 18px 40px rgba(16, 36, 59, 0.08);
+}
+
+.hero {
+  padding: 28px;
+  margin-bottom: 20px;
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.78rem;
+  color: #58708a;
+}
+
+.hero h1 {
+  margin: 0 0 12px;
+  font-size: clamp(2rem, 4vw, 3.2rem);
+}
+
+.hero-copy,
+#statusMessage,
+#moveCounter {
+  margin: 0;
+  color: #3f566d;
+}
+
+.controls,
+.instructions {
+  padding: 20px 24px;
+  margin-bottom: 20px;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  align-items: center;
+}
+
+.controls button {
+  border: none;
+  border-radius: 999px;
+  padding: 12px 18px;
+  font-weight: 700;
+  background: #155eef;
+  color: white;
+  cursor: pointer;
+}
+
+.controls button:last-of-type {
+  background: #e6eef9;
+  color: #10243b;
+}
+
+.board-panel {
+  padding: 24px;
+  margin-bottom: 20px;
+}
+
+.puzzle-board {
+  width: min(92vw, 420px);
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.tile,
+.empty-tile {
+  aspect-ratio: 1 / 1;
+  border-radius: 18px;
+  display: grid;
+  place-items: center;
+  font-size: clamp(1.4rem, 5vw, 2.2rem);
+  font-weight: 800;
+}
+
+.tile {
+  border: none;
+  cursor: pointer;
+  background: linear-gradient(135deg, #155eef 0%, #14b8a6 100%);
+  color: white;
+  box-shadow: 0 12px 24px rgba(21, 94, 239, 0.22);
+}
+
+.tile:hover {
+  transform: translateY(-1px);
+}
+
+.empty-tile {
+  border: 2px dashed rgba(16, 36, 59, 0.18);
+  background: rgba(16, 36, 59, 0.04);
+}
+
+.instructions h2 {
+  margin-top: 0;
+}
+
+.instructions ol {
+  margin: 0;
+  padding-left: 20px;
+  color: #3f566d;
+}
+""",
+        "script.js": """const GOAL_STATE = [1, 2, 3, 4, 5, 6, 7, 8, 0];
+let boardState = [...GOAL_STATE];
+let moveCount = 0;
+
+const boardElement = document.getElementById("puzzleBoard");
+const moveCounter = document.getElementById("moveCounter");
+const statusMessage = document.getElementById("statusMessage");
+const shuffleButton = document.getElementById("shuffleButton");
+const resetButton = document.getElementById("resetButton");
+
+shuffleButton.addEventListener("click", startGame);
+resetButton.addEventListener("click", resetBoard);
+
+renderBoard();
+
+function startGame() {
+  boardState = shuffleBoard([...GOAL_STATE]);
+  moveCount = 0;
+  updateMoveCounter();
+  statusMessage.textContent = "Game started. Put the numbers back in order.";
+  renderBoard();
+}
+
+function resetBoard() {
+  boardState = [...GOAL_STATE];
+  moveCount = 0;
+  updateMoveCounter();
+  statusMessage.textContent = "Board reset. Click Shuffle / Start to play again.";
+  renderBoard();
+}
+
+function shuffleBoard(state) {
+  const shuffled = [...state];
+  do {
+    for (let index = shuffled.length - 1; index > 0; index -= 1) {
+      const swapIndex = Math.floor(Math.random() * (index + 1));
+      [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+    }
+  } while (!isSolvable(shuffled) || isSolved(shuffled));
+  return shuffled;
+}
+
+function isSolvable(state) {
+  let inversions = 0;
+  const filtered = state.filter((value) => value !== 0);
+  for (let left = 0; left < filtered.length; left += 1) {
+    for (let right = left + 1; right < filtered.length; right += 1) {
+      if (filtered[left] > filtered[right]) {
+        inversions += 1;
+      }
+    }
+  }
+  return inversions % 2 === 0;
+}
+
+function isSolved(state) {
+  return state.every((value, index) => value === GOAL_STATE[index]);
+}
+
+function renderBoard() {
+  boardElement.replaceChildren();
+
+  boardState.forEach((value, index) => {
+    if (value === 0) {
+      const emptyTile = document.createElement("div");
+      emptyTile.className = "empty-tile";
+      emptyTile.setAttribute("aria-hidden", "true");
+      boardElement.appendChild(emptyTile);
+      return;
+    }
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "tile";
+    button.textContent = String(value);
+    button.addEventListener("click", () => attemptMove(index));
+    boardElement.appendChild(button);
+  });
+}
+
+function attemptMove(index) {
+  const emptyIndex = boardState.indexOf(0);
+  const validMoves = getAdjacentIndexes(emptyIndex);
+  if (!validMoves.includes(index)) {
+    statusMessage.textContent = "That tile cannot move. Choose a tile next to the empty space.";
+    return;
+  }
+
+  [boardState[index], boardState[emptyIndex]] = [boardState[emptyIndex], boardState[index]];
+  moveCount += 1;
+  updateMoveCounter();
+  renderBoard();
+
+  if (isSolved(boardState)) {
+    statusMessage.textContent = `You solved the puzzle in ${moveCount} moves. Great job!`;
+    return;
+  }
+
+  statusMessage.textContent = "Nice move. Keep going!";
+}
+
+function getAdjacentIndexes(index) {
+  const row = Math.floor(index / 3);
+  const column = index % 3;
+  const adjacent = [];
+
+  if (row > 0) adjacent.push(index - 3);
+  if (row < 2) adjacent.push(index + 3);
+  if (column > 0) adjacent.push(index - 1);
+  if (column < 2) adjacent.push(index + 1);
+
+  return adjacent;
+}
+
+function updateMoveCounter() {
+  moveCounter.textContent = `Moves: ${moveCount}`;
+}
+""",
+        "setup.bat": """@echo off
+echo No setup is required for this static puzzle game.
+echo Open index.html directly or run run.bat.
+""",
+        "setup.sh": """#!/usr/bin/env bash
+echo "No setup is required for this static puzzle game."
+echo "Open index.html directly or run ./run.sh."
+""",
+        "run.bat": """@echo off
+start "" "%~dp0index.html"
+""",
+        "run.sh": """#!/usr/bin/env bash
+set -e
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+echo "Serving the puzzle game at http://127.0.0.1:4173"
+cd "$SCRIPT_DIR"
+python3 -m http.server 4173
+""",
+    }
+
+
+def _build_fastapi_runtime_setting_lines(
+    required_inputs: Sequence[Mapping[str, Any]] | None,
+) -> str:
+    normalized_inputs = list(required_inputs or [])
+    lines = [
+        '        self.app_env = get_env("APP_ENV", default="development")',
+        '        self.port = int(get_env("PORT", default="8000") or "8000")',
+    ]
+    seen_names = {"APP_ENV", "PORT"}
+    for item in normalized_inputs:
+        name = str(item.get("name") or "").strip()
+        if not name or name in seen_names:
+            continue
+        seen_names.add(name)
+        example = str(item.get("example") or "").strip().replace("\\", "\\\\").replace('"', '\\"')
+        required = bool(item.get("required", True))
+        attribute_name = _safe_python_name(name)
+        if required:
+            line = f'        self.{attribute_name} = get_env("{name}", required=True, example="{example}")'
+        else:
+            default = example or ""
+            line = f'        self.{attribute_name} = get_env("{name}", default="{default}", example="{example}")'
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _build_fastapi_backend_files(
+    project_name: str,
+    prefix: str,
+    *,
+    required_inputs: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, str]:
+    app_prefix = _prefixed(prefix, "app")
+    runtime_env_lines = _build_fastapi_runtime_setting_lines(required_inputs)
+    files = {
         _prefixed(prefix, "requirements.txt"): "\n".join(
             [
                 "fastapi",
@@ -895,22 +1323,32 @@ def _build_fastapi_backend_files(project_name: str, prefix: str) -> dict[str, st
                 "",
             ]
         ),
-        _prefixed(app_prefix, "__init__.py"): "",
-        _prefixed(app_prefix, "main.py"): f"""from fastapi import FastAPI
+        _prefixed(app_prefix, "__init__.py"): '"""Application package for the generated backend."""\n',
+        _prefixed(app_prefix, "main.py"): """from fastapi import FastAPI
+import uvicorn
 
+from app.config import settings
 from app.routers import health, items
 
 
-app = FastAPI(title="{project_name} API")
+app = FastAPI(title="Project Agent Starter API")
 app.include_router(health.router)
 app.include_router(items.router, prefix="/api/items", tags=["items"])
 
 
 @app.get("/")
 def read_root() -> dict[str, str]:
-    return {{"status": "ok", "message": "Project is running"}}
+    return {
+        "status": "ok",
+        "message": "Project is running",
+        "environment": settings.app_env,
+    }
+
+
+if __name__ == "__main__":
+    uvicorn.run("app.main:app", host="0.0.0.0", port=settings.port, reload=True)
 """,
-        _prefixed(app_prefix, "routers/__init__.py"): "",
+        _prefixed(app_prefix, "routers/__init__.py"): '"""Router package for generated API endpoints."""\n',
         _prefixed(app_prefix, "routers/health.py"): """from fastapi import APIRouter
 
 from app.schemas.health import HealthResponse
@@ -934,7 +1372,7 @@ router = APIRouter()
 def get_items() -> list[Item]:
     return list_items()
 """,
-        _prefixed(app_prefix, "services/__init__.py"): "",
+        _prefixed(app_prefix, "services/__init__.py"): '"""Service package for generated backend logic."""\n',
         _prefixed(app_prefix, "services/app_service.py"): f"""def get_app_summary() -> str:
     return "{project_name} includes routes, services, schemas, and configuration for quick iteration."
 """,
@@ -947,7 +1385,7 @@ def list_items() -> list[Item]:
         Item(id=2, name="Next iteration", status="planned"),
     ]
 """,
-        _prefixed(app_prefix, "models/__init__.py"): "",
+        _prefixed(app_prefix, "models/__init__.py"): '"""Model package for generated backend persistence."""\n',
         _prefixed(app_prefix, "models/base.py"): """from sqlalchemy.orm import DeclarativeBase
 
 
@@ -967,7 +1405,7 @@ class ItemModel(Base):
     name: Mapped[str] = mapped_column(String(120))
     status: Mapped[str] = mapped_column(String(40), default="ready")
 """,
-        _prefixed(app_prefix, "schemas/__init__.py"): "",
+        _prefixed(app_prefix, "schemas/__init__.py"): '"""Schema package for generated backend payloads."""\n',
         _prefixed(app_prefix, "schemas/health.py"): """from pydantic import BaseModel
 
 
@@ -991,22 +1429,48 @@ from app.config import settings
 engine = create_engine(settings.database_url, future=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 """,
-        _prefixed(app_prefix, "config.py"): """from pydantic_settings import BaseSettings, SettingsConfigDict
+        _prefixed(app_prefix, "config.py"): f"""from pathlib import Path
+import os
+
+from dotenv import load_dotenv
 
 
-class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env")
-    app_env: str = "development"
-    database_url: str = "sqlite:///./app.db"
+APP_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = APP_DIR.parent
+PARENT_PROJECT_DIR = PROJECT_DIR.parent
+
+for candidate in (PROJECT_DIR / ".env", PARENT_PROJECT_DIR / ".env"):
+    if candidate.exists():
+        load_dotenv(candidate, override=False)
+
+
+def get_env(name: str, default: str | None = None, required: bool = False, example: str = "") -> str:
+    value = os.getenv(name)
+    if value:
+        return value
+    if not required:
+        return default or ""
+    prompt = f"Enter {{name}}"
+    if example:
+        prompt += f" (example: {{example}})"
+    prompt += ": "
+    return input(prompt).strip()
+
+
+class Settings:
+    def __init__(self) -> None:
+{runtime_env_lines}
 
 
 settings = Settings()
 """,
     }
+    files.update(_build_backend_subproject_scripts("FastAPI", prefix))
+    return files
 
 
 def _build_express_backend_files(project_name: str, prefix: str) -> dict[str, str]:
-    return {
+    files = {
         _prefixed(prefix, "package.json"): json.dumps(
             {
                 "name": project_name.lower().replace(" ", "-"),
@@ -1082,10 +1546,12 @@ export function listItems(_req, res) {
 };
 """,
     }
+    files.update(_build_backend_subproject_scripts("Express", prefix))
+    return files
 
 
 def _build_react_frontend_files(project_name: str, prefix: str) -> dict[str, str]:
-    return {
+    files = {
         _prefixed(prefix, "package.json"): json.dumps(
             {
                 "name": project_name.lower().replace(" ", "-") + "-frontend",
@@ -1210,10 +1676,12 @@ body {
 }
 """,
     }
+    files.update(_build_frontend_subproject_scripts(prefix))
+    return files
 
 
 def _build_vanilla_frontend_files(project_name: str, prefix: str) -> dict[str, str]:
-    return {
+    files = {
         _prefixed(prefix, "package.json"): json.dumps(
             {
                 "name": project_name.lower().replace(" ", "-") + "-frontend",
@@ -1295,12 +1763,14 @@ document.querySelector("#app").innerHTML = renderHomePage("{project_name}");
 }
 """,
     }
+    files.update(_build_frontend_subproject_scripts(prefix))
+    return files
 
 
 def _build_spring_backend_files(project_name: str, prefix: str) -> dict[str, str]:
     java_base = _prefixed(prefix, "src/main/java/com/example/demo")
     resources_base = _prefixed(prefix, "src/main/resources")
-    return {
+    files = {
         _prefixed(prefix, "pom.xml"): """<project xmlns="http://maven.apache.org/POM/4.0.0"
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
@@ -1346,6 +1816,8 @@ public class Application {
     public static void main(String[] args) {
         SpringApplication.run(Application.class, args);
     }
+    files.update(_build_backend_subproject_scripts("Spring Boot", prefix))
+    return files
 }
 """,
         _prefixed(java_base, "controller/AppController.java"): """package com.example.demo.controller;
@@ -1445,9 +1917,9 @@ def _build_fullstack_scripts(selected_stack: Mapping[str, Any]) -> dict[str, str
             ")\n"
         )
         backend_run_windows = (
-            'start "Backend" cmd /k "cd backend && .venv\\Scripts\\python -m uvicorn app.main:app --reload"\n'
+            'start "Backend" cmd /k "cd backend && call run.bat"\n'
         )
-        backend_run_unix = '(cd backend && . .venv/bin/activate && uvicorn app.main:app --reload) &\n'
+        backend_run_unix = '(cd backend && ./run.sh) &\n'
     elif backend in {"Express", "NestJS"}:
         backend_setup = (
             "if exist backend\\package.json (\n"
@@ -1537,12 +2009,26 @@ echo "Setup complete."
 """,
         "run.bat": """@echo off
 setlocal
-call .venv\\Scripts\\python -m uvicorn app.main:app --reload
+echo Starting Project...
+if not exist .env if exist .env.example copy .env.example .env >nul
+if not exist .venv python -m venv .venv
+call .venv\\Scripts\\python -m pip install --upgrade pip
+call .venv\\Scripts\\pip install -r requirements.txt
+call .venv\\Scripts\\python app/main.py
 """,
         "run.sh": """#!/usr/bin/env bash
 set -e
+echo "Starting Project..."
+if [ ! -f .env ] && [ -f .env.example ]; then
+  cp .env.example .env
+fi
+if [ ! -d .venv ]; then
+  python3 -m venv .venv
+fi
 . .venv/bin/activate
-uvicorn app.main:app --reload
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+python app/main.py
 """,
     }
 
@@ -1577,13 +2063,180 @@ set -e
     }
 
 
+def _build_backend_subproject_scripts(backend: str, prefix: str) -> dict[str, str]:
+    if not prefix:
+        return {}
+    if backend in {"FastAPI", "Flask"}:
+        return {
+            _prefixed(prefix, "setup.bat"): """@echo off
+setlocal
+pushd "%~dp0"
+python -m venv .venv
+call .venv\\Scripts\\python -m pip install --upgrade pip
+call .venv\\Scripts\\pip install -r requirements.txt
+popd
+echo Backend setup complete.
+""",
+            _prefixed(prefix, "run.bat"): """@echo off
+setlocal
+pushd "%~dp0"
+echo Starting Project...
+if not exist ..\\.env if exist ..\\.env.example copy ..\\.env.example ..\\.env >nul
+if not exist .venv python -m venv .venv
+call .venv\\Scripts\\python -m pip install --upgrade pip
+call .venv\\Scripts\\pip install -r requirements.txt
+call .venv\\Scripts\\python app/main.py
+popd
+""",
+            _prefixed(prefix, "setup.sh"): """#!/usr/bin/env bash
+set -e
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+echo "Backend setup complete."
+""",
+            _prefixed(prefix, "run.sh"): """#!/usr/bin/env bash
+set -e
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+echo "Starting Project..."
+if [ ! -f ../.env ] && [ -f ../.env.example ]; then
+  cp ../.env.example ../.env
+fi
+if [ ! -d .venv ]; then
+  python3 -m venv .venv
+fi
+. .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+python app/main.py
+""",
+        }
+    if backend in {"Express", "NestJS"}:
+        return {
+            _prefixed(prefix, "setup.bat"): """@echo off
+setlocal
+pushd "%~dp0"
+call npm install
+popd
+echo Backend setup complete.
+""",
+            _prefixed(prefix, "run.bat"): """@echo off
+setlocal
+pushd "%~dp0"
+call npm start
+popd
+""",
+            _prefixed(prefix, "setup.sh"): """#!/usr/bin/env bash
+set -e
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+npm install
+echo "Backend setup complete."
+""",
+            _prefixed(prefix, "run.sh"): """#!/usr/bin/env bash
+set -e
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+npm start
+""",
+        }
+    if backend == "Spring Boot":
+        return {
+            _prefixed(prefix, "setup.bat"): """@echo off
+setlocal
+pushd "%~dp0"
+where mvn >nul 2>nul && call mvn install || echo Maven not found. Skipping install.
+popd
+""",
+            _prefixed(prefix, "run.bat"): """@echo off
+setlocal
+pushd "%~dp0"
+call mvn spring-boot:run
+popd
+""",
+            _prefixed(prefix, "setup.sh"): """#!/usr/bin/env bash
+set -e
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+if command -v mvn >/dev/null 2>&1; then
+  mvn install
+else
+  echo "Maven not found. Skipping install."
+fi
+""",
+            _prefixed(prefix, "run.sh"): """#!/usr/bin/env bash
+set -e
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+mvn spring-boot:run
+""",
+        }
+    return {}
+
+
+def _build_frontend_subproject_scripts(prefix: str) -> dict[str, str]:
+    if not prefix:
+        return {}
+    return {
+        _prefixed(prefix, "setup.bat"): """@echo off
+setlocal
+pushd "%~dp0"
+call npm install
+popd
+echo Frontend setup complete.
+""",
+        _prefixed(prefix, "run.bat"): """@echo off
+setlocal
+pushd "%~dp0"
+call npm run dev
+popd
+""",
+        _prefixed(prefix, "setup.sh"): """#!/usr/bin/env bash
+set -e
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+npm install
+echo "Frontend setup complete."
+""",
+        _prefixed(prefix, "run.sh"): """#!/usr/bin/env bash
+set -e
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+npm run dev
+""",
+    }
+
+
 def _protected_runtime_paths(
     selected_stack: Mapping[str, Any],
     project_kind: Mapping[str, Any],
+    *,
+    template_family: str = "",
 ) -> set[str]:
+    if template_family == "puzzle-game":
+        return {"index.html", "style.css", "script.js", "setup.bat", "setup.sh", "run.bat", "run.sh"}
+
     paths: set[str] = {"setup.bat", "setup.sh", "run.bat", "run.sh"}
     backend_prefix = "backend/" if project_kind["isFullStack"] else ""
     frontend_prefix = "frontend/" if project_kind["isFullStack"] else ""
+
+    if project_kind["isFullStack"]:
+        paths.update(
+            {
+                f"{backend_prefix}setup.bat",
+                f"{backend_prefix}setup.sh",
+                f"{backend_prefix}run.bat",
+                f"{backend_prefix}run.sh",
+                f"{frontend_prefix}setup.bat",
+                f"{frontend_prefix}setup.sh",
+                f"{frontend_prefix}run.bat",
+                f"{frontend_prefix}run.sh",
+            }
+        )
 
     if project_kind["hasBackend"]:
         backend = str(selected_stack.get("backend") or "FastAPI")
@@ -1647,14 +2300,20 @@ def _protected_runtime_paths(
 def _required_runtime_paths(
     selected_stack: Mapping[str, Any],
     project_kind: Mapping[str, Any],
+    *,
+    template_family: str = "",
 ) -> set[str]:
-    return set(_protected_runtime_paths(selected_stack, project_kind))
+    return set(_protected_runtime_paths(selected_stack, project_kind, template_family=template_family))
 
 
 def _package_json_paths(
     selected_stack: Mapping[str, Any],
     project_kind: Mapping[str, Any],
+    *,
+    template_family: str = "",
 ) -> list[str]:
+    if template_family == "puzzle-game":
+        return []
     paths: list[str] = []
     backend_prefix = "backend/" if project_kind["isFullStack"] else ""
     frontend_prefix = "frontend/" if project_kind["isFullStack"] else ""
@@ -1682,7 +2341,11 @@ def _expected_package_scripts(
 def _entry_validation_paths(
     selected_stack: Mapping[str, Any],
     project_kind: Mapping[str, Any],
+    *,
+    template_family: str = "",
 ) -> list[str]:
+    if template_family == "puzzle-game":
+        return ["index.html", "script.js"]
     paths: list[str] = []
     backend_prefix = "backend/" if project_kind["isFullStack"] else ""
     frontend_prefix = "frontend/" if project_kind["isFullStack"] else ""
@@ -1723,9 +2386,13 @@ def _backend_endpoint_paths(
 def _frontend_page_paths(
     selected_stack: Mapping[str, Any],
     project_kind: Mapping[str, Any],
+    *,
+    template_family: str = "",
 ) -> list[str]:
     if not project_kind["hasFrontend"]:
         return []
+    if template_family == "puzzle-game":
+        return ["index.html", "script.js", "style.css"]
     frontend_prefix = "frontend/" if project_kind["isFullStack"] else ""
     frontend = str(selected_stack.get("frontend") or "React")
     if frontend in {"React", "Next.js", "Vue"}:
@@ -1761,8 +2428,14 @@ def _valid_entry_file(path: str, content: str) -> bool:
         return "export default function App" in text
     if lower.endswith("src/main.js"):
         return "renderHomePage" in text and 'querySelector("#app")' in text
+    if lower.endswith("script.js"):
+        return "GOAL_STATE" in text and "function startGame()" in text and "function attemptMove(index)" in text
     if lower.endswith("index.html"):
-        return '<div id="root"></div>' in text or '<div id="app"></div>' in text
+        return (
+            '<div id="root"></div>' in text
+            or '<div id="app"></div>' in text
+            or 'id="puzzleBoard"' in text
+        )
     if lower.endswith("application.java"):
         return "@SpringBootApplication" in text and "SpringApplication.run" in text
     return True

@@ -9,6 +9,7 @@ const STACK_OPTIONS = {
 
 const ideaInput = document.getElementById("ideaInput");
 const suggestButton = document.getElementById("suggestButton");
+const askQuestionsButton = document.getElementById("askQuestionsButton");
 const continueButton = document.getElementById("continueButton");
 const skipQuestionsButton = document.getElementById("skipQuestionsButton");
 const generateProjectButton = document.getElementById("generateProjectButton");
@@ -74,7 +75,8 @@ let showingSuggestion = false;
 initializeStackSelectors();
 refreshUiState();
 
-suggestButton.addEventListener("click", handleStartAgent);
+suggestButton.addEventListener("click", handleGenerateImmediately);
+askQuestionsButton.addEventListener("click", handleAskQuestions);
 continueButton.addEventListener("click", handleContinueAgent);
 skipQuestionsButton.addEventListener("click", handleSkipQuestions);
 generateProjectButton.addEventListener("click", handleGenerateProject);
@@ -170,6 +172,7 @@ function clearStatus() {
 
 function setBusy(isBusy, message = "Working...") {
   suggestButton.disabled = isBusy;
+  askQuestionsButton.disabled = isBusy;
   continueButton.disabled = isBusy || !agentAnalysis;
   skipQuestionsButton.disabled = isBusy || !agentAnalysis;
   generateProjectButton.disabled = isBusy || !finalRequirements;
@@ -178,7 +181,7 @@ function setBusy(isBusy, message = "Working...") {
   clearButton.disabled = isBusy && !baseIdea && !currentPreview && !agentAnalysis;
   generationModeSelect.disabled = isBusy;
   Object.values(stackSelects).forEach((select) => {
-    select.disabled = isBusy || !agentAnalysis;
+    select.disabled = isBusy || (!agentAnalysis && !currentPreview);
   });
   if (isBusy) {
     setStatus(message, "loading");
@@ -193,7 +196,7 @@ function refreshUiState() {
   confirmButton.disabled = !currentPreview;
   clearButton.disabled = !baseIdea && !currentPreview && !agentAnalysis;
   Object.values(stackSelects).forEach((select) => {
-    select.disabled = !agentAnalysis;
+    select.disabled = !agentAnalysis && !currentPreview;
   });
 
   const questions = getQuestionList();
@@ -208,7 +211,48 @@ function refreshUiState() {
   }
 }
 
-async function handleStartAgent() {
+async function handleGenerateImmediately() {
+  const idea = ideaInput.value.trim();
+  if (!idea) {
+    setStatus("Please enter a project idea before generating the starter.", "error");
+    return;
+  }
+
+  baseIdea = idea;
+  agentAnalysis = null;
+  agentAnswers = {};
+  finalRequirements = "";
+  currentPreview = null;
+  resetQuestionFlow();
+  agentSection.hidden = true;
+  previewSection.hidden = true;
+  downloadSection.hidden = true;
+  finalizeCard.hidden = true;
+  advancedStackSection.hidden = false;
+  setBusy(true, "Generating runnable starter project...");
+
+  try {
+    selectedStack = collectSelectedStack();
+    const payload = await requestPreview({
+      idea,
+      selectedStack,
+      finalRequirements: "",
+    });
+    currentPreview = payload;
+    selectedStack = payload.selectedStack || selectedStack;
+    applySelectedStackToControls(selectedStack);
+    renderPreview(payload);
+    setStatus("Runnable starter generated. You can regenerate, ask questions, or create the ZIP.", "success");
+  } catch (error) {
+    currentPreview = null;
+    previewSection.hidden = true;
+    setStatus(error.message || "Could not generate the runnable starter.", "error");
+  } finally {
+    clearBusyState();
+  }
+}
+
+async function handleAskQuestions() {
   const idea = ideaInput.value.trim();
   if (!idea) {
     setStatus("Please enter a project idea before starting the agent.", "error");
@@ -620,6 +664,7 @@ function renderFinalization(finalized) {
 
 function clearBusyState() {
   suggestButton.disabled = false;
+  askQuestionsButton.disabled = false;
   generationModeSelect.disabled = false;
   refreshUiState();
 }

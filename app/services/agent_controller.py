@@ -19,6 +19,7 @@ class IdeaContext:
     generation_context: str = ""
     detected_user_choices: list[str] = field(default_factory=list)
     declared_project_type: str = ""
+    project_category: str = ""
     selected_stack: dict[str, str] = field(default_factory=dict)
     project_kind: dict[str, Any] = field(default_factory=dict)
 
@@ -254,6 +255,7 @@ class AgentController:
             project_name=project_name,
             selected_stack=selected_stack,
             project_kind=project_kind,
+            required_inputs=required_inputs,
             custom_manifest=custom_manifest,
             raw_files=raw.get("files"),
         )
@@ -323,6 +325,25 @@ class AgentController:
         planner_started_at: float | None = None
         planner_duration = 0.0
 
+        if ai.is_single_sentence_auto_mode(context.idea, context.requested_stack) and ai.category_allows_direct_generation(
+            context.project_category
+        ):
+            preview = self._build_single_sentence_preview(context)
+            validated_preview = self.validate_project(preview)
+            file_count, injected_paths = self._preview_generation_stats(preview, validated_preview)
+            total_duration = time.perf_counter() - preview_started_at
+            logger.info(
+                "project_preview_auto_mode mode=%s category=%s planner_duration=%.2fs total_duration=%.2fs fallback_used=%s file_count=%s injected_required_files=%s",
+                context.generation_mode,
+                context.project_category,
+                0.0,
+                total_duration,
+                False,
+                file_count,
+                injected_paths,
+            )
+            return GeneratedProjectResult(preview=validated_preview).preview
+
         try:
             planner_started_at = time.perf_counter()
             raw_plan = await ai.generate_project_plan(
@@ -362,38 +383,73 @@ class AgentController:
                         + ["Deep Mode used the fast template custom files because the 70-second preview budget was nearly exhausted."]
                     )
 
-            preview = self.validate_project(preview)
+            validated_preview = self.validate_project(preview)
+            file_count, injected_paths = self._preview_generation_stats(preview, validated_preview)
             total_duration = time.perf_counter() - preview_started_at
             logger.info(
-                "project_preview_complete mode=%s planner_duration=%.2fs total_duration=%.2fs fallback_used=%s",
+                "project_preview_complete mode=%s planner_duration=%.2fs total_duration=%.2fs fallback_used=%s file_count=%s injected_required_files=%s",
                 context.generation_mode,
                 planner_duration,
                 total_duration,
                 False,
+                file_count,
+                injected_paths,
             )
-            return GeneratedProjectResult(preview=preview).preview
+            return GeneratedProjectResult(preview=validated_preview).preview
         except Exception as exc:
             if planner_started_at is not None and planner_duration == 0.0:
                 planner_duration = time.perf_counter() - planner_started_at
             preview = self._build_fallback_preview(context, str(exc))
-            preview = self.validate_project(preview)
+            validated_preview = self.validate_project(preview)
+            file_count, injected_paths = self._preview_generation_stats(preview, validated_preview)
             total_duration = time.perf_counter() - preview_started_at
             logger.warning(
-                "project_preview_fallback mode=%s planner_duration=%.2fs total_duration=%.2fs fallback_used=%s reason=%s",
+                "project_preview_fallback mode=%s planner_duration=%.2fs total_duration=%.2fs fallback_used=%s file_count=%s injected_required_files=%s reason=%s",
                 context.generation_mode,
                 planner_duration,
                 total_duration,
                 True,
+                file_count,
+                injected_paths,
                 str(exc),
             )
             return GeneratedProjectResult(
-                preview=preview,
+                preview=validated_preview,
                 fallback_used=True,
                 fallback_reason=str(exc),
             ).preview
 
     def validate_project(self, preview: dict[str, Any]) -> dict[str, Any]:
         return ai.prepare_preview_for_output(dict(preview))
+
+    def _preview_generation_stats(
+        self,
+        raw_preview: Mapping[str, Any],
+        validated_preview: Mapping[str, Any],
+    ) -> tuple[int, list[str]]:
+        before_files = {
+            str(item.get("path") or "").strip(): str(item.get("content") or "")
+            for item in raw_preview.get("files", [])
+            if isinstance(item, Mapping) and str(item.get("path") or "").strip()
+        }
+        after_files = {
+            str(item.get("path") or "").strip(): str(item.get("content") or "")
+            for item in validated_preview.get("files", [])
+            if isinstance(item, Mapping) and str(item.get("path") or "").strip()
+        }
+        selected_stack = ai.normalize_stack_selection(validated_preview.get("selectedStack"))
+        project_kind = ai.determine_project_kind(selected_stack)
+        required_paths = ai.required_preview_paths(
+            selected_stack,
+            project_kind,
+            str(validated_preview.get("templateFamily") or "").strip(),
+        )
+        injected_paths = sorted(
+            path
+            for path in required_paths
+            if not str(before_files.get(path, "")).strip() or before_files.get(path) != after_files.get(path)
+        )
+        return len(after_files), injected_paths
 
     def _build_idea_context(
         self,
@@ -412,6 +468,7 @@ class AgentController:
         )
         detected_user_choices = ai.detect_user_choices(idea)
         declared_project_type = ai.infer_declared_project_type(idea)
+        project_category = ai.detect_project_category(idea)
         context = IdeaContext(
             idea=idea,
             requested_stack=requested_stack,
@@ -420,6 +477,7 @@ class AgentController:
             generation_context=generation_context,
             detected_user_choices=detected_user_choices,
             declared_project_type=declared_project_type,
+            project_category=project_category,
         )
         context.selected_stack = self.decide_stack(context)
         context.project_kind = ai.determine_project_kind(
@@ -427,6 +485,49 @@ class AgentController:
             declared_project_type,
         )
         return context
+
+    def _build_single_sentence_preview(self, context: IdeaContext) -> dict[str, Any]:
+        if context.project_category == "game":
+            project_name = ai.clean_project_name(None, context.idea)
+            return {
+                "projectName": project_name,
+                "detectedUserChoices": context.detected_user_choices,
+                "selectedStack": context.selected_stack,
+                "chosenStack": ai.build_chosen_stack(context.selected_stack),
+                "assumptions": [
+                    "Single-sentence auto mode detected a puzzle game and generated a dependency-free starter immediately.",
+                    "No follow-up questions were required because the template includes a complete playable UI and run scripts.",
+                ],
+                "summary": "",
+                "problemStatement": context.idea.strip() or f"Build a starter project for {project_name}.",
+                "architecture": [],
+                "modules": [],
+                "packageRequirements": [],
+                "installCommands": [],
+                "runCommands": [],
+                "requiredInputs": [],
+                "envVariables": [],
+                "files": ai.finalize_preview_files(
+                    project_name=project_name,
+                    selected_stack=context.selected_stack,
+                    project_kind=context.project_kind,
+                    required_inputs=[],
+                    template_family="puzzle-game",
+                    raw_files=[],
+                ),
+                "templateFamily": "puzzle-game",
+            }
+
+        structure_plan = self.plan_project_structure(context, {})
+        preview = structure_plan.to_preview_dict()
+        preview["assumptions"] = ai.dedupe_list(
+            list(preview.get("assumptions", []))
+            + [
+                f"Single-sentence auto mode detected a supported {context.project_category or context.project_kind['label']} starter and generated it with template-backed defaults.",
+                "You can still open Ask Questions later or manually change the stack before regenerating.",
+            ]
+        )
+        return preview
 
     def _build_fallback_preview(self, context: IdeaContext, reason: str) -> dict[str, Any]:
         structure_plan = self.plan_project_structure(context, {})

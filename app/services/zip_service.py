@@ -7,9 +7,6 @@ from uuid import uuid4
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from .file_service import (
-    SYSTEM_FILENAMES,
-    build_file_tree_from_paths,
-    build_required_docs,
     ensure_within_directory,
     sanitize_relative_path,
     slugify,
@@ -29,22 +26,6 @@ def create_project_zip(preview: dict[str, Any], generated_dir: Path) -> dict[str
     project_dir.mkdir(parents=True, exist_ok=False)
 
     _write_project_source_files(project_dir, preview)
-    bundle_info: dict[str, Any] = {}
-
-    actual_paths = [
-        path.relative_to(project_dir).as_posix()
-        for path in sorted(project_dir.rglob("*"))
-        if path.is_file()
-    ]
-    bundle_info["actualFileTree"] = build_file_tree_from_paths(actual_paths)
-
-    required_docs = build_required_docs(preview, bundle_info)
-    full_paths = sorted(set(actual_paths + list(required_docs.keys())))
-    bundle_info["actualFileTree"] = build_file_tree_from_paths(full_paths)
-    required_docs = build_required_docs(preview, bundle_info)
-    for doc_name, content in required_docs.items():
-        target_path = project_dir / doc_name
-        _write_text_file(project_dir, target_path, content)
 
     zip_path = generated_dir / f"{bundle_name}.zip"
     with ZipFile(zip_path, "w", compression=ZIP_DEFLATED) as zip_file:
@@ -63,9 +44,7 @@ def _write_project_source_files(project_dir: Path, preview: dict[str, Any]) -> N
     written_paths: set[Path] = set()
     for file_entry in preview.get("files", []):
         relative_path = sanitize_relative_path(str(file_entry.get("path", "")))
-        if relative_path in written_paths or (
-            relative_path.name in SYSTEM_FILENAMES and relative_path.parent == Path(".")
-        ):
+        if relative_path in written_paths:
             continue
 
         content = str(file_entry.get("content", ""))

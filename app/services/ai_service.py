@@ -12,8 +12,10 @@ import httpx
 from dotenv import load_dotenv
 
 from .file_service import (
+    assemble_complete_preview_files,
     build_preview_file_tree,
     finalize_preview_files,
+    required_preview_paths,
 )
 
 
@@ -215,6 +217,102 @@ KEYWORD_MAP = {
         "Vercel": ("vercel",),
         "Docker": ("docker", "container"),
         "None": ("no deployment",),
+    },
+}
+
+PROJECT_CATEGORY_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
+    ("game", ("puzzle", "sliding puzzle", "memory", "tic tac toe", "quiz", "game")),
+    ("todo", ("todo", "to-do", "task tracker", "tasks")),
+    ("inventory", ("inventory", "stock", "warehouse")),
+    ("dashboard", ("dashboard", "analytics", "admin dashboard")),
+    ("chat", ("chat", "messaging", "messenger")),
+    ("ecommerce", ("ecommerce", "e-commerce", "store", "shop", "checkout")),
+    ("blog", ("blog", "cms", "posts")),
+    ("portfolio", ("portfolio", "personal site", "resume site")),
+    ("api-backend", ("api backend", "api", "backend service", "service api")),
+    ("full-stack-crud", ("crud",)),
+]
+
+PROJECT_CATEGORY_DEFAULT_STACKS: dict[str, dict[str, str]] = {
+    "game": {
+        "language": "JavaScript",
+        "frontend": "HTML/CSS/JavaScript",
+        "backend": "None",
+        "database": "None",
+        "aiTools": "None",
+        "deployment": "None",
+    },
+    "todo": {
+        "language": "Python",
+        "frontend": "React",
+        "backend": "FastAPI",
+        "database": "SQLite",
+        "aiTools": "None",
+        "deployment": "Render",
+    },
+    "inventory": {
+        "language": "Python",
+        "frontend": "React",
+        "backend": "FastAPI",
+        "database": "SQLite",
+        "aiTools": "None",
+        "deployment": "Render",
+    },
+    "dashboard": {
+        "language": "Python",
+        "frontend": "React",
+        "backend": "FastAPI",
+        "database": "SQLite",
+        "aiTools": "None",
+        "deployment": "Render",
+    },
+    "chat": {
+        "language": "Python",
+        "frontend": "React",
+        "backend": "FastAPI",
+        "database": "SQLite",
+        "aiTools": "OpenAI API",
+        "deployment": "Render",
+    },
+    "ecommerce": {
+        "language": "Python",
+        "frontend": "React",
+        "backend": "FastAPI",
+        "database": "SQLite",
+        "aiTools": "None",
+        "deployment": "Render",
+    },
+    "blog": {
+        "language": "Python",
+        "frontend": "React",
+        "backend": "FastAPI",
+        "database": "SQLite",
+        "aiTools": "None",
+        "deployment": "Render",
+    },
+    "portfolio": {
+        "language": "JavaScript",
+        "frontend": "React",
+        "backend": "None",
+        "database": "None",
+        "aiTools": "None",
+        "deployment": "Vercel",
+    },
+    "api-backend": {
+        "language": "Python",
+        "frontend": "None",
+        "backend": "FastAPI",
+        "database": "SQLite",
+        "aiTools": "None",
+        "deployment": "Render",
+    },
+    "full-stack-crud": {
+        "language": "Python",
+        "frontend": "React",
+        "backend": "FastAPI",
+        "database": "SQLite",
+        "aiTools": "None",
+        "deployment": "Render",
     },
 }
 
@@ -632,6 +730,40 @@ def infer_declared_project_type(idea: str) -> str:
     return ""
 
 
+def detect_project_category(idea: str) -> str:
+    lowered = idea.lower()
+    for category, keywords in PROJECT_CATEGORY_KEYWORDS:
+        if any(keyword in lowered for keyword in keywords):
+            return category
+    return ""
+
+
+def category_stack_defaults(category: str) -> dict[str, str]:
+    return dict(PROJECT_CATEGORY_DEFAULT_STACKS.get(category, {}))
+
+
+def category_template_family(category: str) -> str:
+    if category == "game":
+        return "puzzle-game"
+    return ""
+
+
+def is_single_sentence_auto_mode(
+    idea: str,
+    requested_stack: Mapping[str, Any] | None = None,
+) -> bool:
+    del requested_stack
+    cleaned = idea.strip()
+    if not cleaned or "\n" in cleaned:
+        return False
+    words = re.findall(r"[A-Za-z0-9]+", cleaned)
+    return len(words) <= 14
+
+
+def category_allows_direct_generation(category: str) -> bool:
+    return category in PROJECT_CATEGORY_DEFAULT_STACKS
+
+
 def build_agent_understanding(
     idea: str,
     suggested_stack: dict[str, str],
@@ -669,6 +801,8 @@ def build_agent_analysis_assumptions(
         assumptions.append("The current recommendation treats this as a frontend-focused starter unless you add backend needs.")
     if questions:
         assumptions.append("Each question starts with your own input first. If you leave it blank, the agent will suggest a default and explain the benefit.")
+    else:
+        assumptions.append("This idea is short enough for single-sentence auto mode, so the agent can generate a runnable starter immediately with safe defaults.")
     if suggested_stack.get("deployment") == "Render":
         assumptions.append("Render is used as a deployment default when no target is mentioned explicitly.")
     return dedupe_list(assumptions)
@@ -726,6 +860,10 @@ def build_agent_questions(
     suggested_stack: dict[str, str],
     project_kind: dict[str, Any],
 ) -> list[dict[str, Any]]:
+    category = detect_project_category(idea)
+    if is_single_sentence_auto_mode(idea) and category_allows_direct_generation(category):
+        return []
+
     lowered = idea.lower()
     questions: list[dict[str, Any]] = []
 
@@ -1157,6 +1295,49 @@ def validate_planner_payload(payload: Any) -> dict[str, Any]:
     return normalized_payload
 
 
+def build_template_preview_metadata(
+    template_family: str,
+    project_name: str,
+    generation_mode: str,
+) -> dict[str, Any]:
+    if template_family != "puzzle-game":
+        return {}
+
+    mode_label = "Fast Mode" if generation_mode == "fast" else "Deep Mode"
+    return {
+        "summary": (
+            f"{project_name} is a fully playable sliding puzzle starter built with plain HTML, CSS, and JavaScript. "
+            f"{mode_label} keeps the project dependency-free so it can run immediately by opening index.html or using the provided run scripts."
+        ),
+        "architecture": [
+            "A single static frontend delivers the puzzle board, buttons, instructions, and win state without a backend dependency.",
+            "Vanilla JavaScript owns tile shuffling, move validation, move counting, reset behavior, and win detection in one self-contained script.",
+            "Run scripts open the project directly or serve it locally without any package installation.",
+        ],
+        "modules": [
+            {
+                "name": "Puzzle Interface",
+                "purpose": "Renders the puzzle board, action buttons, and instructions in a single static page.",
+                "keyFiles": ["index.html", "style.css"],
+            },
+            {
+                "name": "Game Logic",
+                "purpose": "Handles shuffle/start, movement rules, move counting, reset behavior, and win detection.",
+                "keyFiles": ["script.js"],
+            },
+        ],
+        "packageRequirements": [],
+        "installCommands": ["setup.bat", "./setup.sh"],
+        "runCommands": ["run.bat", "./run.sh", "Open index.html directly in a browser"],
+        "requiredInputs": [],
+        "envVariables": [],
+        "assumptions": [
+            "Single-sentence auto mode detected a puzzle game and selected the dependency-free static template.",
+            "No backend, database, or package installation is required for the first runnable version.",
+        ],
+    }
+
+
 def normalize_preview(
     raw_preview: Mapping[str, Any] | None,
     idea: str,
@@ -1168,6 +1349,12 @@ def normalize_preview(
     mode = normalize_generation_mode(generation_mode)
     requested = normalize_stack_selection(requested_stack)
     planning_context = requirements_context or idea
+    template_family = str(raw.get("templateFamily") or "").strip()
+    template_metadata = build_template_preview_metadata(
+        template_family,
+        clean_project_name(raw.get("projectName"), idea),
+        mode,
+    )
     detected_choices = dedupe_list(
         normalize_string_list(raw.get("detectedUserChoices")) or detect_user_choices(idea)
     )
@@ -1180,42 +1367,62 @@ def normalize_preview(
     project_kind = determine_project_kind(selected_stack, raw.get("projectType"))
     project_name = clean_project_name(raw.get("projectName"), idea)
 
-    modules = merge_modules(
-        normalize_modules(raw.get("modules")),
-        build_default_modules(selected_stack, project_kind),
-    )
-    required_inputs = merge_required_inputs(
-        normalize_required_inputs(raw.get("requiredInputs")),
-        build_required_inputs(planning_context, selected_stack, project_kind, modules),
-    )
-    env_variables = merge_env_variables(
-        normalize_env_variables(raw.get("envVariables")),
-        required_inputs_to_env_variables(required_inputs),
-    )
-    package_requirements = dedupe_list(
-        normalize_string_list(raw.get("packageRequirements"))
-        + build_package_requirements(selected_stack, project_kind)
-    )
-    install_commands = dedupe_list(
-        normalize_string_list(raw.get("installCommands"))
-        + build_install_commands(selected_stack, project_kind)
-    )
-    run_commands = dedupe_list(
-        normalize_string_list(raw.get("runCommands"))
-        + build_run_commands(selected_stack, project_kind)
-    )
+    if template_family == "puzzle-game":
+        modules = normalize_modules(raw.get("modules")) or template_metadata.get("modules", [])
+        required_inputs = normalize_required_inputs(raw.get("requiredInputs")) or template_metadata.get("requiredInputs", [])
+        env_variables = normalize_env_variables(raw.get("envVariables")) or template_metadata.get("envVariables", [])
+        package_requirements = dedupe_list(
+            normalize_string_list(raw.get("packageRequirements"))
+            or list(template_metadata.get("packageRequirements", []))
+        )
+        install_commands = dedupe_list(
+            normalize_string_list(raw.get("installCommands"))
+            or list(template_metadata.get("installCommands", []))
+        )
+        run_commands = dedupe_list(
+            normalize_string_list(raw.get("runCommands"))
+            or list(template_metadata.get("runCommands", []))
+        )
+    else:
+        modules = merge_modules(
+            normalize_modules(raw.get("modules")),
+            build_default_modules(selected_stack, project_kind),
+        )
+        required_inputs = merge_required_inputs(
+            normalize_required_inputs(raw.get("requiredInputs")),
+            build_required_inputs(planning_context, selected_stack, project_kind, modules),
+        )
+        env_variables = merge_env_variables(
+            normalize_env_variables(raw.get("envVariables")),
+            required_inputs_to_env_variables(required_inputs),
+        )
+        package_requirements = dedupe_list(
+            normalize_string_list(raw.get("packageRequirements"))
+            + build_package_requirements(selected_stack, project_kind)
+        )
+        install_commands = dedupe_list(
+            normalize_string_list(raw.get("installCommands"))
+            + build_install_commands(selected_stack, project_kind)
+        )
+        run_commands = dedupe_list(
+            normalize_string_list(raw.get("runCommands"))
+            + build_run_commands(selected_stack, project_kind)
+        )
 
     custom_manifest = normalize_custom_manifest(raw.get("customFiles"), selected_stack, project_kind)
     validated_files = finalize_preview_files(
         project_name=project_name,
         selected_stack=selected_stack,
         project_kind=project_kind,
+        required_inputs=required_inputs,
+        template_family=template_family,
         custom_manifest=custom_manifest,
         raw_files=raw.get("files"),
     )
 
     summary = (
         str(raw.get("summary") or "").strip()
+        or str(template_metadata.get("summary") or "").strip()
         or build_summary(project_name, project_kind, selected_stack, mode)
     )
     problem_statement = (
@@ -1223,19 +1430,30 @@ def normalize_preview(
         or idea.strip()
         or f"Build a starter project for {project_name}."
     )
+    assumption_defaults = [] if template_family == "puzzle-game" else build_assumptions(
+        selected_stack,
+        project_kind,
+        requested,
+        mode,
+        bool(custom_manifest),
+    )
+    architecture_defaults = [] if template_family == "puzzle-game" else build_architecture(
+        selected_stack,
+        project_kind,
+    )
     assumptions = dedupe_list(
         normalize_string_list(raw.get("assumptions"))
-        + build_assumptions(selected_stack, project_kind, requested, mode, bool(custom_manifest))
+        + normalize_string_list(template_metadata.get("assumptions"))
+        + assumption_defaults
     )
     architecture = dedupe_list(
         normalize_string_list(raw.get("architecture"))
-        + build_architecture(selected_stack, project_kind)
+        + normalize_string_list(template_metadata.get("architecture"))
+        + architecture_defaults
     )
     chosen_stack = build_chosen_stack(selected_stack)
 
-    file_tree = build_preview_file_tree(validated_files, include_env_example=bool(env_variables))
-
-    return {
+    preview_payload = {
         "projectName": project_name,
         "detectedUserChoices": detected_choices,
         "selectedStack": selected_stack,
@@ -1250,9 +1468,21 @@ def normalize_preview(
         "runCommands": run_commands,
         "requiredInputs": required_inputs,
         "envVariables": env_variables,
-        "fileTree": file_tree,
         "files": validated_files,
     }
+    complete_files, _ = assemble_complete_preview_files(
+        preview_payload,
+        selected_stack=selected_stack,
+        project_kind=project_kind,
+    )
+    preview_payload["files"] = complete_files
+    if template_family:
+        preview_payload["templateFamily"] = template_family
+    preview_payload["fileTree"] = build_preview_file_tree(
+        complete_files,
+        include_env_example=bool(env_variables),
+    )
+    return preview_payload
 
 
 def apply_custom_file_overrides(
@@ -1265,13 +1495,19 @@ def apply_custom_file_overrides(
         project_name=str(preview.get("projectName") or "Generated Project"),
         selected_stack=selected_stack,
         project_kind=project_kind,
+        required_inputs=normalize_required_inputs(preview.get("requiredInputs")),
         raw_files=merged_files,
+    )
+    complete_files, _ = assemble_complete_preview_files(
+        {**preview, "files": validated_files},
+        selected_stack=selected_stack,
+        project_kind=project_kind,
     )
     env_variables = normalize_env_variables(preview.get("envVariables"))
 
-    preview["files"] = validated_files
+    preview["files"] = complete_files
     preview["fileTree"] = build_preview_file_tree(
-        validated_files,
+        complete_files,
         include_env_example=bool(env_variables),
     )
     return preview
@@ -1303,6 +1539,7 @@ def resolve_selected_stack(
     model_selection = normalize_stack_selection(model_stack)
     resolved = normalize_stack_selection(requested_stack)
     lowered_idea = idea.lower()
+    category = detect_project_category(idea)
 
     backend = pick_stack_value(
         requested_stack.get("backend"),
@@ -1346,13 +1583,22 @@ def resolve_selected_stack(
         }
     )
 
+    category_defaults = category_stack_defaults(category)
+    if category_defaults:
+        for field in STACK_FIELDS:
+            requested_value = str(requested_stack.get(field, "") or "").strip()
+            model_value = str(model_selection.get(field, "") or "").strip()
+            explicit_keyword = match_keyword(field, lowered_idea)
+            if requested_value in {"", "Auto"} and model_value in {"", "Auto"} and not explicit_keyword:
+                resolved[field] = category_defaults.get(field, resolved[field])
+
     if not detected_choices and all(value == "Auto" for value in requested_stack.values()):
-        resolved["backend"] = resolved["backend"] if resolved["backend"] != "Auto" else "FastAPI"
-        resolved["frontend"] = resolved["frontend"] if resolved["frontend"] != "Auto" else "React"
-        resolved["language"] = resolved["language"] if resolved["language"] != "Auto" else "Python"
-        resolved["database"] = resolved["database"] if resolved["database"] != "Auto" else "SQLite"
-        resolved["aiTools"] = resolved["aiTools"] if resolved["aiTools"] != "Auto" else "None"
-        resolved["deployment"] = resolved["deployment"] if resolved["deployment"] != "Auto" else "Render"
+        resolved["backend"] = resolved["backend"] if resolved["backend"] != "Auto" else category_defaults.get("backend", "FastAPI")
+        resolved["frontend"] = resolved["frontend"] if resolved["frontend"] != "Auto" else category_defaults.get("frontend", "React")
+        resolved["language"] = resolved["language"] if resolved["language"] != "Auto" else category_defaults.get("language", "Python")
+        resolved["database"] = resolved["database"] if resolved["database"] != "Auto" else category_defaults.get("database", "SQLite")
+        resolved["aiTools"] = resolved["aiTools"] if resolved["aiTools"] != "Auto" else category_defaults.get("aiTools", "None")
+        resolved["deployment"] = resolved["deployment"] if resolved["deployment"] != "Auto" else category_defaults.get("deployment", "Render")
 
     return resolved
 
@@ -1732,6 +1978,15 @@ def build_required_inputs(
                 "example": "development",
                 "whereToAdd": ".env",
                 "purpose": "Application environment name.",
+            }
+        )
+        required_inputs.append(
+            {
+                "name": "PORT",
+                "required": False,
+                "example": "8000",
+                "whereToAdd": ".env",
+                "purpose": "Local port used when the backend starts from the generated run scripts.",
             }
         )
 
