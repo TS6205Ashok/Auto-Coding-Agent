@@ -129,7 +129,10 @@ class ZipRequest(BaseModel):
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(
+        name="index.html",
+        context={"request": request},
+    )
 
 
 @app.post("/api/suggest")
