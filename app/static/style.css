@@ -246,6 +246,71 @@ button:disabled {
   color: var(--danger);
 }
 
+.agent-activity-panel {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid #dbe7ff;
+  border-radius: 12px;
+  background: #f8fbff;
+}
+
+.compact-heading {
+  margin-bottom: 12px;
+}
+
+.compact-heading h2 {
+  font-size: 1.05rem;
+}
+
+.agent-activity-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.agent-activity-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid #dbe7ff;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.agent-activity-list li::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #d0d5dd;
+  flex: 0 0 auto;
+}
+
+.agent-activity-list li[data-state="current"] {
+  border-color: #b2ddff;
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.agent-activity-list li[data-state="current"]::before {
+  background: var(--info);
+}
+
+.agent-activity-list li[data-state="done"] {
+  border-color: #abefc6;
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.agent-activity-list li[data-state="done"]::before {
+  background: var(--success);
+}
+
 .agent-panel {
   background: var(--surface);
 }

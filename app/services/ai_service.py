@@ -15,7 +15,7 @@ from .file_service import (
     assemble_complete_preview_files,
     build_preview_file_tree,
     finalize_preview_files,
-    required_preview_paths,
+    required_preview_paths as _required_preview_paths,
 )
 
 
@@ -1153,8 +1153,9 @@ def build_final_requirements_summary(
         details.append("Prepare payment provider integration points and required keys.")
     if answers.get("user_roles") and answers.get("user_roles") != "Single user / no roles":
         details.append(f"Support user access model: {answers['user_roles']}.")
-    if answers.get("external_apis") and answers.get("external_apis").lower() not in {"", "none", "no"}:
-        details.append(f"Prepare integration boundaries for: {answers['external_apis']}.")
+    external_apis = str(answers.get("external_apis") or "").strip()
+    if external_apis.lower() not in {"", "none", "no"}:
+        details.append(f"Prepare integration boundaries for: {external_apis}.")
     if answers.get("complexity_level"):
         details.append(f"Target complexity level: {answers['complexity_level']}.")
     if answers.get("ai_integration") and answers.get("ai_integration") not in {"", "None"}:
@@ -1457,6 +1458,7 @@ def normalize_preview(
 
     preview_payload = {
         "projectName": project_name,
+        "projectType": str(raw.get("projectType") or project_kind.get("label", "")),
         "detectedUserChoices": detected_choices,
         "selectedStack": selected_stack,
         "chosenStack": chosen_stack,
@@ -1472,6 +1474,16 @@ def normalize_preview(
         "envVariables": env_variables,
         "files": validated_files,
     }
+    for passthrough_key in (
+        "recommendedIde",
+        "alternativeIde",
+        "runtimeTools",
+        "packageManager",
+        "migrationSummary",
+        "stackAnalysis",
+    ):
+        if passthrough_key in raw:
+            preview_payload[passthrough_key] = raw.get(passthrough_key)
     complete_files, _ = assemble_complete_preview_files(
         preview_payload,
         selected_stack=selected_stack,
@@ -1513,6 +1525,14 @@ def apply_custom_file_overrides(
         include_env_example=bool(env_variables),
     )
     return preview
+
+
+def required_preview_paths(
+    selected_stack: dict[str, str],
+    project_kind: dict[str, Any],
+    template_family: str = "",
+) -> set[str]:
+    return _required_preview_paths(selected_stack, project_kind, template_family)
 
 
 def normalize_generation_mode(value: Any) -> str:
@@ -2297,10 +2317,9 @@ def build_custom_template_content(
     path: str,
     purpose: str,
     project_name: str,
-    selected_stack: dict[str, str],
-    project_kind: dict[str, Any],
+    _selected_stack: dict[str, str],
+    _project_kind: dict[str, Any],
 ) -> str:
-    filename = Path(path).name
     stem = Path(path).stem
     pretty_name = stem.replace("_", " ").replace("-", " ").title()
     extension = Path(path).suffix.lower()

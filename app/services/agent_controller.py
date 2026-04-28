@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-import logging
-import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Mapping
 
-from . import ai_service as ai
-
-logger = logging.getLogger(__name__)
+from app.agents.architecture_agent import ArchitectureAgent
+from app.agents.context import AgentWorkflowContext
+from app.agents.file_planning_agent import FilePlanningAgent
+from app.agents.orchestrator_agent import orchestrator_agent
+from app.agents.repair_agent import RepairAgent
+from app.agents.requirement_agent import RequirementAgent
+from app.services import ai_service as ai
 
 
 @dataclass(slots=True)
@@ -112,15 +115,34 @@ class GeneratedProjectResult:
 
 
 class AgentController:
+    def __init__(self) -> None:
+        self.orchestrator = orchestrator_agent
+        self.requirement_agent = RequirementAgent()
+        self.architecture_agent = ArchitectureAgent()
+        self.file_planning_agent = FilePlanningAgent()
+        self.repair_agent = RepairAgent()
+
+    def understand_prompt(self, prompt: str) -> dict[str, Any]:
+        workflow = self._build_workflow_context(prompt)
+        return {
+            "understanding": workflow.understanding,
+            "detectedUserChoices": workflow.detected_user_choices,
+            "projectCategory": workflow.project_category or "generic",
+            "projectKind": workflow.project_kind.get("label", ""),
+        }
+
+    def detect_project_type(self, prompt: str) -> dict[str, str]:
+        workflow = self._build_workflow_context(prompt)
+        return {
+            "projectType": workflow.project_category or "generic",
+            "projectKind": workflow.project_kind.get("label", ""),
+        }
+
     def analyze_idea(self, idea: str) -> dict[str, Any]:
         context = self._build_idea_context(idea)
         questions = self.ask_questions(context)
         result = AgentAnalysisResult(
-            understanding=ai.build_agent_understanding(
-                context.idea,
-                context.selected_stack,
-                context.project_kind,
-            ),
+            understanding=self.understand_prompt(idea)["understanding"],
             assumptions=ai.build_agent_analysis_assumptions(
                 context.selected_stack,
                 context.project_kind,
@@ -149,6 +171,11 @@ class AgentController:
             model_stack,
             context.detected_user_choices,
         )
+
+    def decide_architecture(self, context: IdeaContext) -> list[str]:
+        workflow = self._workflow_from_idea_context(context)
+        workflow = self.architecture_agent.run(workflow)
+        return workflow.architecture
 
     def determine_missing_info(self, context: IdeaContext) -> list[dict[str, Any]]:
         return ai.build_agent_questions(
@@ -194,117 +221,67 @@ class AgentController:
         )
         return result.to_api_dict()
 
+    def plan_files(self, context: IdeaContext) -> dict[str, Any]:
+        workflow = self._workflow_from_idea_context(context)
+        workflow = self.file_planning_agent.run(workflow)
+        return {
+            "templateFamily": workflow.template_family or "generic",
+            "requiredPaths": list(workflow.file_manifest),
+        }
+
     def plan_project_structure(
         self,
         context: IdeaContext,
         raw_plan: Mapping[str, Any] | None = None,
     ) -> ProjectStructurePlan:
-        raw = dict(raw_plan or {})
-        detected_choices = ai.dedupe_list(
-            ai.normalize_string_list(raw.get("detectedUserChoices"))
-            or context.detected_user_choices
-            or ai.detect_user_choices(context.idea)
-        )
-        selected_stack = ai.resolve_selected_stack(
-            context.idea,
-            context.requested_stack,
-            raw.get("selectedStack") or context.selected_stack,
-            detected_choices,
-        )
-        project_kind = ai.determine_project_kind(
-            selected_stack,
-            raw.get("projectType") or context.declared_project_type,
-        )
-        project_name = ai.clean_project_name(raw.get("projectName"), context.idea)
-
-        modules = ai.merge_modules(
-            ai.normalize_modules(raw.get("modules")),
-            ai.build_default_modules(selected_stack, project_kind),
-        )
-        required_inputs = ai.merge_required_inputs(
-            ai.normalize_required_inputs(raw.get("requiredInputs")),
-            ai.build_required_inputs(
-                context.generation_context or context.idea,
-                selected_stack,
-                project_kind,
-                modules,
-            ),
-        )
-        env_variables = ai.merge_env_variables(
-            ai.normalize_env_variables(raw.get("envVariables")),
-            ai.required_inputs_to_env_variables(required_inputs),
-        )
-        package_requirements = ai.dedupe_list(
-            ai.normalize_string_list(raw.get("packageRequirements"))
-            + ai.build_package_requirements(selected_stack, project_kind)
-        )
-        install_commands = ai.dedupe_list(
-            ai.normalize_string_list(raw.get("installCommands"))
-            + ai.build_install_commands(selected_stack, project_kind)
-        )
-        run_commands = ai.dedupe_list(
-            ai.normalize_string_list(raw.get("runCommands"))
-            + ai.build_run_commands(selected_stack, project_kind)
-        )
-        custom_manifest = ai.normalize_custom_manifest(
-            raw.get("customFiles"),
-            selected_stack,
-            project_kind,
-        )
-        files = ai.finalize_preview_files(
-            project_name=project_name,
-            selected_stack=selected_stack,
-            project_kind=project_kind,
-            required_inputs=required_inputs,
-            custom_manifest=custom_manifest,
-            raw_files=raw.get("files"),
-        )
-        assumptions = ai.dedupe_list(
-            ai.normalize_string_list(raw.get("assumptions"))
-            + ai.build_assumptions(
-                selected_stack,
-                project_kind,
-                context.requested_stack,
-                context.generation_mode,
-                bool(custom_manifest),
-            )
-        )
-        architecture = ai.dedupe_list(
-            ai.normalize_string_list(raw.get("architecture"))
-            + ai.build_architecture(selected_stack, project_kind)
+        workflow = self._workflow_from_idea_context(context)
+        workflow = self.file_planning_agent.run(workflow, raw_plan)
+        preview_files = ai.finalize_preview_files(
+            project_name=workflow.project_name,
+            selected_stack=workflow.selected_stack,
+            project_kind=workflow.project_kind,
+            required_inputs=workflow.required_inputs,
+            custom_manifest=workflow.custom_manifest,
+            template_family=workflow.template_family,
+            raw_files=workflow.files,
         )
         file_tree = ai.build_preview_file_tree(
-            files,
-            include_env_example=bool(env_variables),
+            preview_files,
+            include_env_example=bool(workflow.env_variables),
+        )
+        return ProjectStructurePlan(
+            project_name=workflow.project_name,
+            detected_user_choices=workflow.detected_user_choices,
+            selected_stack=workflow.selected_stack,
+            chosen_stack=ai.build_chosen_stack(workflow.selected_stack),
+            assumptions=workflow.assumptions,
+            summary=workflow.summary,
+            problem_statement=workflow.problem_statement,
+            architecture=workflow.architecture,
+            modules=workflow.modules,
+            package_requirements=workflow.package_requirements,
+            install_commands=workflow.install_commands,
+            run_commands=workflow.run_commands,
+            required_inputs=workflow.required_inputs,
+            env_variables=workflow.env_variables,
+            custom_manifest=workflow.custom_manifest,
+            files=preview_files,
+            file_tree=file_tree,
+            project_kind=workflow.project_kind,
         )
 
-        return ProjectStructurePlan(
-            project_name=project_name,
-            detected_user_choices=detected_choices,
+    async def build_preview(
+        self,
+        prompt: str,
+        generation_mode: str = "fast",
+        selected_stack: Mapping[str, Any] | None = None,
+        final_requirements: str = "",
+    ) -> dict[str, Any]:
+        return await self.orchestrator.run(
+            prompt,
+            generation_mode,
             selected_stack=selected_stack,
-            chosen_stack=ai.build_chosen_stack(selected_stack),
-            assumptions=assumptions,
-            summary=str(raw.get("summary") or "").strip()
-            or ai.build_summary(
-                project_name,
-                project_kind,
-                selected_stack,
-                context.generation_mode,
-            ),
-            problem_statement=str(raw.get("problemStatement") or "").strip()
-            or context.idea.strip()
-            or f"Build a starter project for {project_name}.",
-            architecture=architecture,
-            modules=modules,
-            package_requirements=package_requirements,
-            install_commands=install_commands,
-            run_commands=run_commands,
-            required_inputs=required_inputs,
-            env_variables=env_variables,
-            custom_manifest=custom_manifest,
-            files=files,
-            file_tree=file_tree,
-            project_kind=project_kind,
+            final_requirements=final_requirements,
         )
 
     async def generate_files(
@@ -314,150 +291,23 @@ class AgentController:
         generation_mode: str = "fast",
         final_requirements: str = "",
     ) -> dict[str, Any]:
-        context = self._build_idea_context(
+        return await self.build_preview(
             idea,
-            selected_stack=selected_stack,
             generation_mode=generation_mode,
+            selected_stack=selected_stack,
             final_requirements=final_requirements,
         )
-        preview_started_at = time.perf_counter()
-        deadline = time.monotonic() + ai.preview_budget_seconds(context.generation_mode)
-        planner_started_at: float | None = None
-        planner_duration = 0.0
-
-        if ai.is_single_sentence_auto_mode(context.idea, context.requested_stack) and ai.category_allows_direct_generation(
-            context.project_category
-        ):
-            preview = self._build_single_sentence_preview(context)
-            validated_preview = self.validate_project(preview)
-            file_count, injected_paths = self._preview_generation_stats(preview, validated_preview)
-            total_duration = time.perf_counter() - preview_started_at
-            template_family = str(validated_preview.get("templateFamily") or ai.category_template_family(context.project_category) or "generic").strip()
-            logger.info(
-                "project_preview_auto_mode mode=%s category=%s template=%s planner_duration=%.2fs total_duration=%.2fs fallback_used=%s file_count=%s injected_required_files=%s",
-                context.generation_mode,
-                context.project_category,
-                template_family,
-                0.0,
-                total_duration,
-                False,
-                file_count,
-                injected_paths,
-            )
-            return GeneratedProjectResult(preview=validated_preview).preview
-
-        try:
-            planner_started_at = time.perf_counter()
-            raw_plan = await ai.generate_project_plan(
-                context.generation_context,
-                context.requested_stack,
-                context.generation_mode,
-                deadline,
-            )
-            planner_duration = time.perf_counter() - planner_started_at
-            structure_plan = self.plan_project_structure(context, raw_plan)
-            preview = structure_plan.to_preview_dict()
-
-            if context.generation_mode == "deep" and structure_plan.custom_manifest:
-                remaining = ai.remaining_time(deadline)
-                if remaining >= ai.MIN_CUSTOM_PASS_SECONDS:
-                    try:
-                        generated_custom_files = await ai.generate_deep_custom_files(
-                            context.generation_context,
-                            structure_plan.project_name,
-                            structure_plan.selected_stack,
-                            structure_plan.custom_manifest,
-                            remaining,
-                        )
-                        preview = ai.apply_custom_file_overrides(preview, generated_custom_files)
-                        preview["assumptions"] = ai.dedupe_list(
-                            preview["assumptions"]
-                            + ["Deep Mode enriched custom business logic with a second scoped AI pass."]
-                        )
-                    except Exception as exc:
-                        preview["assumptions"] = ai.dedupe_list(
-                            preview["assumptions"]
-                            + [f"Deep Mode custom enrichment was skipped, so template custom files were kept: {exc}"]
-                        )
-                else:
-                    preview["assumptions"] = ai.dedupe_list(
-                        preview["assumptions"]
-                        + ["Deep Mode used the fast template custom files because the 70-second preview budget was nearly exhausted."]
-                    )
-
-            validated_preview = self.validate_project(preview)
-            file_count, injected_paths = self._preview_generation_stats(preview, validated_preview)
-            total_duration = time.perf_counter() - preview_started_at
-            template_family = str(validated_preview.get("templateFamily") or ai.category_template_family(context.project_category) or "generic").strip()
-            logger.info(
-                "project_preview_complete mode=%s category=%s template=%s planner_duration=%.2fs total_duration=%.2fs fallback_used=%s file_count=%s injected_required_files=%s",
-                context.generation_mode,
-                context.project_category or context.project_kind.get("label", ""),
-                template_family,
-                planner_duration,
-                total_duration,
-                False,
-                file_count,
-                injected_paths,
-            )
-            return GeneratedProjectResult(preview=validated_preview).preview
-        except Exception as exc:
-            if planner_started_at is not None and planner_duration == 0.0:
-                planner_duration = time.perf_counter() - planner_started_at
-            preview = self._build_fallback_preview(context, str(exc))
-            validated_preview = self.validate_project(preview)
-            file_count, injected_paths = self._preview_generation_stats(preview, validated_preview)
-            total_duration = time.perf_counter() - preview_started_at
-            template_family = str(validated_preview.get("templateFamily") or ai.category_template_family(context.project_category) or "generic").strip()
-            logger.warning(
-                "project_preview_fallback mode=%s category=%s template=%s planner_duration=%.2fs total_duration=%.2fs fallback_used=%s file_count=%s injected_required_files=%s reason=%s",
-                context.generation_mode,
-                context.project_category or context.project_kind.get("label", ""),
-                template_family,
-                planner_duration,
-                total_duration,
-                True,
-                file_count,
-                injected_paths,
-                str(exc),
-            )
-            return GeneratedProjectResult(
-                preview=validated_preview,
-                fallback_used=True,
-                fallback_reason=str(exc),
-            ).preview
 
     def validate_project(self, preview: dict[str, Any]) -> dict[str, Any]:
-        return ai.prepare_preview_for_output(dict(preview))
+        return self.orchestrator.prepare_preview(preview)
 
-    def _preview_generation_stats(
-        self,
-        raw_preview: Mapping[str, Any],
-        validated_preview: Mapping[str, Any],
-    ) -> tuple[int, list[str]]:
-        before_files = {
-            str(item.get("path") or "").strip(): str(item.get("content") or "")
-            for item in raw_preview.get("files", [])
-            if isinstance(item, Mapping) and str(item.get("path") or "").strip()
-        }
-        after_files = {
-            str(item.get("path") or "").strip(): str(item.get("content") or "")
-            for item in validated_preview.get("files", [])
-            if isinstance(item, Mapping) and str(item.get("path") or "").strip()
-        }
-        selected_stack = ai.normalize_stack_selection(validated_preview.get("selectedStack"))
-        project_kind = ai.determine_project_kind(selected_stack)
-        required_paths = ai.required_preview_paths(
-            selected_stack,
-            project_kind,
-            str(validated_preview.get("templateFamily") or "").strip(),
-        )
-        injected_paths = sorted(
-            path
-            for path in required_paths
-            if not str(before_files.get(path, "")).strip() or before_files.get(path) != after_files.get(path)
-        )
-        return len(after_files), injected_paths
+    def repair_project(self, preview: dict[str, Any]) -> dict[str, Any]:
+        workflow = self._workflow_from_preview(preview)
+        workflow = self.repair_agent.run(workflow)
+        return workflow.preview
+
+    def package_zip(self, preview: dict[str, Any], generated_dir: Path) -> dict[str, str]:
+        return self.orchestrator.build_zip(preview, generated_dir)
 
     def _build_idea_context(
         self,
@@ -467,92 +317,77 @@ class AgentController:
         generation_mode: str = "fast",
         final_requirements: str = "",
     ) -> IdeaContext:
-        requested_stack = ai.normalize_stack_selection(selected_stack)
-        normalized_mode = ai.normalize_generation_mode(generation_mode)
-        generation_context = ai.build_generation_context(
+        workflow = self._build_workflow_context(
             idea,
-            final_requirements,
-            normalized_mode,
-        )
-        detected_user_choices = ai.detect_user_choices(idea)
-        declared_project_type = ai.infer_declared_project_type(idea)
-        project_category = ai.detect_project_category(idea)
-        context = IdeaContext(
-            idea=idea,
-            requested_stack=requested_stack,
-            generation_mode=normalized_mode,
+            selected_stack=selected_stack,
+            generation_mode=generation_mode,
             final_requirements=final_requirements,
-            generation_context=generation_context,
-            detected_user_choices=detected_user_choices,
-            declared_project_type=declared_project_type,
-            project_category=project_category,
         )
-        context.selected_stack = self.decide_stack(context)
-        context.project_kind = ai.determine_project_kind(
-            context.selected_stack,
-            declared_project_type,
+        return IdeaContext(
+            idea=idea,
+            requested_stack=workflow.requested_stack,
+            generation_mode=workflow.generation_mode,
+            final_requirements=final_requirements,
+            generation_context=workflow.generation_context,
+            detected_user_choices=workflow.detected_user_choices,
+            declared_project_type=workflow.declared_project_type,
+            project_category=workflow.project_category,
+            selected_stack=workflow.selected_stack,
+            project_kind=workflow.project_kind,
         )
-        return context
 
-    def _build_single_sentence_preview(self, context: IdeaContext) -> dict[str, Any]:
-        if context.project_category == "game":
-            project_name = ai.clean_project_name(None, context.idea)
-            return {
-                "projectName": project_name,
-                "detectedUserChoices": context.detected_user_choices,
-                "selectedStack": context.selected_stack,
-                "chosenStack": ai.build_chosen_stack(context.selected_stack),
-                "assumptions": [
-                    "Single-sentence auto mode detected a puzzle game and generated a dependency-free starter immediately.",
-                    "No follow-up questions were required because the template includes a complete playable UI and run scripts.",
-                ],
-                "summary": "",
-                "problemStatement": context.idea.strip() or f"Build a starter project for {project_name}.",
-                "architecture": [],
-                "modules": [],
-                "packageRequirements": [],
-                "installCommands": [],
-                "runCommands": [],
-                "requiredInputs": [],
-                "envVariables": [],
-                "files": ai.finalize_preview_files(
-                    project_name=project_name,
-                    selected_stack=context.selected_stack,
-                    project_kind=context.project_kind,
-                    required_inputs=[],
-                    template_family="puzzle-game",
-                    raw_files=[],
-                ),
-                "templateFamily": "puzzle-game",
-            }
+    def _build_workflow_context(
+        self,
+        prompt: str,
+        *,
+        selected_stack: Mapping[str, Any] | None = None,
+        generation_mode: str = "fast",
+        final_requirements: str = "",
+    ) -> AgentWorkflowContext:
+        workflow = AgentWorkflowContext(
+            prompt=prompt,
+            generation_mode=generation_mode,
+            requested_stack=ai.normalize_stack_selection(selected_stack),
+            final_requirements=final_requirements,
+        )
+        workflow = self.requirement_agent.run(workflow)
+        workflow = self.architecture_agent.run(workflow)
+        return workflow
 
-        structure_plan = self.plan_project_structure(context, {})
-        preview = structure_plan.to_preview_dict()
-        preview["assumptions"] = ai.dedupe_list(
-            list(preview.get("assumptions", []))
-            + [
-                f"Single-sentence auto mode detected a supported {context.project_category or context.project_kind['label']} starter and generated it with template-backed defaults.",
-                "You can still open Ask Questions later or manually change the stack before regenerating.",
-            ]
+    def _workflow_from_idea_context(self, context: IdeaContext) -> AgentWorkflowContext:
+        workflow = AgentWorkflowContext(
+            prompt=context.idea,
+            generation_mode=context.generation_mode,
+            requested_stack=context.requested_stack,
+            final_requirements=context.final_requirements,
+            generation_context=context.generation_context,
+            detected_user_choices=list(context.detected_user_choices),
+            declared_project_type=context.declared_project_type,
+            project_category=context.project_category or "generic",
+            selected_stack=dict(context.selected_stack),
+            project_kind=dict(context.project_kind),
         )
-        return preview
+        workflow = self.architecture_agent.run(workflow)
+        return workflow
 
-    def _build_fallback_preview(self, context: IdeaContext, reason: str) -> dict[str, Any]:
-        structure_plan = self.plan_project_structure(context, {})
-        preview = structure_plan.to_preview_dict()
-        fallback_note = (
-            "Deep Mode AI enrichment was unavailable, so the 100% runnable starter project uses the safe template-generated fallback."
-            if context.generation_mode == "deep"
-            else "Fast Mode AI planning was unavailable, so the 100% runnable starter project uses the safe template-generated fallback."
+    def _workflow_from_preview(self, preview: dict[str, Any]) -> AgentWorkflowContext:
+        selected_stack = ai.normalize_stack_selection(preview.get("selectedStack"))
+        project_kind = ai.determine_project_kind(selected_stack, preview.get("projectType"))
+        return AgentWorkflowContext(
+            prompt=str(preview.get("problemStatement") or preview.get("summary") or preview.get("projectName") or ""),
+            generation_mode="fast",
+            requested_stack=selected_stack,
+            generation_context=str(preview.get("problemStatement") or preview.get("summary") or ""),
+            declared_project_type=str(preview.get("projectType") or ""),
+            project_category=ai.detect_project_category(
+                str(preview.get("problemStatement") or preview.get("summary") or preview.get("projectName") or "")
+            )
+            or "generic",
+            selected_stack=selected_stack,
+            project_kind=project_kind,
+            template_family=str(preview.get("templateFamily") or "").strip(),
+            preview=dict(preview),
         )
-        preview["assumptions"] = ai.dedupe_list(
-            [
-                fallback_note,
-                f"Template fallback preview was generated because the AI planner could not complete in time or returned invalid output: {reason}",
-                *preview.get("assumptions", []),
-            ]
-        )
-        return preview
 
 
 agent_controller = AgentController()

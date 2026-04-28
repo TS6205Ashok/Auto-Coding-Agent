@@ -26,13 +26,15 @@
         <p class="section-note">Generate a runnable starter immediately from one prompt. Questions are optional if you want extra refinement.</p>
       </div>
 
-      <label class="field-label" for="ideaInput">Describe what you want to build</label>
+      <label class="field-label" for="ideaInput">Describe what you want to build, paste old code, or describe an existing project</label>
       <textarea
         id="ideaInput"
         name="idea"
         rows="8"
         placeholder="Example:
 - Build a beginner-friendly expense tracker web app for small teams
+- Convert my C++ project to Python
+- I built a todo app in Node, rewrite it to FastAPI
 - Create an AI support dashboard and choose the best stack automatically
 - Generate a React + FastAPI starter for a customer portal with admin access"
       ></textarea>
@@ -49,13 +51,35 @@
 
       <div class="action-row">
         <button id="suggestButton" class="primary-button" type="button">Generate Project</button>
-        <button id="askQuestionsButton" class="secondary-button" type="button">Ask Questions</button>
+        <button id="askQuestionsButton" class="secondary-button" type="button">Ask Agent Questions</button>
         <button id="regenerateButton" class="secondary-button" type="button" disabled>Regenerate With Selected Stack</button>
         <button id="confirmButton" class="success-button" type="button" disabled>Confirm And Create ZIP</button>
         <button id="clearButton" class="ghost-button" type="button" disabled>Clear Preview</button>
       </div>
 
       <div id="statusMessage" class="status-message" hidden></div>
+
+      <article id="agentActivityPanel" class="agent-activity-panel" hidden>
+        <div class="section-heading compact-heading">
+          <div>
+          <p class="section-label">Agent Activity</p>
+          <h2>Live build pipeline</h2>
+        </div>
+          <p class="section-note">The agent can analyze old stacks, plan migrations, generate code, validate, repair, and package the final runnable project.</p>
+        </div>
+        <ul id="agentActivityList" class="agent-activity-list">
+          <li data-step="understood">RequirementAgent extracted requirements</li>
+          <li data-step="analyzed">StackAnalysisAgent detected the current stack</li>
+          <li data-step="migrated">MigrationAgent planned the target stack</li>
+          <li data-step="stack">ArchitectureAgent selected architecture and stack</li>
+          <li data-step="planned">FilePlanningAgent planned files</li>
+          <li data-step="generated">CodeGenerationAgent generated files</li>
+          <li data-step="tools">ToolRecommendationAgent suggested IDE and tools</li>
+          <li data-step="validated">ValidationAgent validated project</li>
+          <li data-step="repaired">RepairAgent repaired issues</li>
+          <li data-step="ready">PackagingAgent prepared preview and ZIP contract</li>
+        </ul>
+      </article>
     </section>
 
     <section id="agentSection" class="panel agent-panel" hidden>
@@ -161,6 +185,21 @@
         <article class="card">
           <h3>Selected Stack</h3>
           <ul id="selectedStackList" class="list-block"></ul>
+        </article>
+
+        <article class="card">
+          <h3>Recommended IDE</h3>
+          <ul id="toolRecommendationList" class="list-block"></ul>
+        </article>
+
+        <article class="card">
+          <h3>Detected Source Stack</h3>
+          <ul id="stackAnalysisList" class="list-block"></ul>
+        </article>
+
+        <article class="card wide">
+          <h3>Migration Summary</h3>
+          <ul id="migrationSummaryList" class="list-block"></ul>
         </article>
 
         <article class="card">

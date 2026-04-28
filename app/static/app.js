@@ -18,6 +18,8 @@ const confirmButton = document.getElementById("confirmButton");
 const clearButton = document.getElementById("clearButton");
 const statusMessage = document.getElementById("statusMessage");
 const generationModeSelect = document.getElementById("generationModeSelect");
+const agentActivityPanel = document.getElementById("agentActivityPanel");
+const agentActivityList = document.getElementById("agentActivityList");
 
 const agentSection = document.getElementById("agentSection");
 const advancedStackSection = document.getElementById("advancedStackSection");
@@ -37,6 +39,9 @@ const projectNameHeading = document.getElementById("projectNameHeading");
 const detectedChoicesList = document.getElementById("detectedChoicesList");
 const stackChips = document.getElementById("stackChips");
 const selectedStackList = document.getElementById("selectedStackList");
+const toolRecommendationList = document.getElementById("toolRecommendationList");
+const stackAnalysisList = document.getElementById("stackAnalysisList");
+const migrationSummaryList = document.getElementById("migrationSummaryList");
 const chosenStackList = document.getElementById("chosenStackList");
 const assumptionsList = document.getElementById("assumptionsList");
 const summaryText = document.getElementById("summaryText");
@@ -71,8 +76,21 @@ let selectedStack = getDefaultStackState();
 let currentQuestionIndex = 0;
 let currentQuestionDraft = "";
 let showingSuggestion = false;
+let agentActivityState = {
+  understood: "pending",
+  analyzed: "pending",
+  migrated: "pending",
+  stack: "pending",
+  planned: "pending",
+  generated: "pending",
+  tools: "pending",
+  validated: "pending",
+  repaired: "pending",
+  ready: "pending",
+};
 
 initializeStackSelectors();
+resetAgentActivity();
 refreshUiState();
 
 suggestButton.addEventListener("click", handleGenerateImmediately);
@@ -170,6 +188,45 @@ function clearStatus() {
   statusMessage.textContent = "";
 }
 
+function resetAgentActivity() {
+  agentActivityState = {
+    understood: "pending",
+    analyzed: "pending",
+    migrated: "pending",
+    stack: "pending",
+    planned: "pending",
+    generated: "pending",
+    tools: "pending",
+    validated: "pending",
+    repaired: "pending",
+    ready: "pending",
+  };
+  renderAgentActivity();
+}
+
+function setAgentActivity(nextState) {
+  agentActivityState = {
+    ...agentActivityState,
+    ...nextState,
+  };
+  renderAgentActivity();
+}
+
+function renderAgentActivity() {
+  if (!agentActivityPanel || !agentActivityList) {
+    return;
+  }
+
+  const hasVisibleState = Object.values(agentActivityState).some((value) => value !== "pending");
+  agentActivityPanel.hidden = !hasVisibleState;
+
+  Array.from(agentActivityList.querySelectorAll("li")).forEach((item) => {
+    const step = item.dataset.step;
+    const state = agentActivityState[step] || "pending";
+    item.dataset.state = state;
+  });
+}
+
 function setBusy(isBusy, message = "Working...") {
   suggestButton.disabled = isBusy;
   askQuestionsButton.disabled = isBusy;
@@ -224,11 +281,20 @@ async function handleGenerateImmediately() {
   finalRequirements = "";
   currentPreview = null;
   resetQuestionFlow();
+  resetAgentActivity();
   agentSection.hidden = true;
   previewSection.hidden = true;
   downloadSection.hidden = true;
   finalizeCard.hidden = true;
   advancedStackSection.hidden = false;
+  setAgentActivity({
+    understood: "done",
+    analyzed: "done",
+    migrated: "done",
+    stack: "done",
+    planned: "done",
+    generated: "current",
+  });
   setBusy(true, "Generating runnable starter project...");
 
   try {
@@ -242,10 +308,24 @@ async function handleGenerateImmediately() {
     selectedStack = payload.selectedStack || selectedStack;
     applySelectedStackToControls(selectedStack);
     renderPreview(payload);
+    setAgentActivity({
+      generated: "done",
+      tools: "done",
+      validated: "done",
+      repaired: "done",
+      ready: "done",
+    });
     setStatus("Project preview is ready. You can regenerate, ask questions, or create the ZIP.", "success");
   } catch (error) {
     currentPreview = null;
     previewSection.hidden = true;
+    setAgentActivity({
+      generated: "done",
+      tools: "done",
+      validated: "done",
+      repaired: "done",
+      ready: "pending",
+    });
     setStatus(error.message || "Could not generate the runnable starter.", "error");
   } finally {
     clearBusyState();
@@ -264,9 +344,13 @@ async function handleAskQuestions() {
   finalRequirements = "";
   agentAnswers = {};
   resetQuestionFlow();
+  resetAgentActivity();
   previewSection.hidden = true;
   downloadSection.hidden = true;
   finalizeCard.hidden = true;
+  setAgentActivity({
+    understood: "current",
+  });
   setBusy(true, "Analyzing your idea...");
 
   try {
@@ -277,6 +361,13 @@ async function handleAskQuestions() {
     renderAgentAnalysis(payload);
     agentSection.hidden = false;
     advancedStackSection.hidden = false;
+    setAgentActivity({
+      understood: "done",
+      analyzed: "done",
+      migrated: "done",
+      stack: "done",
+      planned: "done",
+    });
     setStatus("The agent reviewed your idea. Answer the questions one by one or skip and use the suggested defaults.", "success");
   } catch (error) {
     agentAnalysis = null;
@@ -384,6 +475,11 @@ async function handleConfirmZip() {
   }
 
   setBusy(true, "Creating ZIP from the latest accepted preview...");
+  setAgentActivity({
+    validated: "current",
+    repaired: "current",
+    ready: "current",
+  });
 
   try {
     const response = await fetch("/api/zip", {
@@ -405,6 +501,11 @@ async function handleConfirmZip() {
     downloadLink.download = payload.filename;
     downloadText.textContent = `Your generated project ZIP is ready: ${payload.filename}`;
     downloadSection.hidden = false;
+    setAgentActivity({
+      validated: "done",
+      repaired: "done",
+      ready: "done",
+    });
     setStatus("ZIP created successfully. You can download it now.", "success");
   } catch (error) {
     setStatus(error.message || "Could not create the ZIP.", "error");
@@ -684,6 +785,18 @@ async function finalizeAgentConversation({ fillDefaults }) {
 
 async function generatePreviewFromCurrentState(successMessage) {
   selectedStack = collectSelectedStack();
+  setAgentActivity({
+    understood: "done",
+    analyzed: "done",
+    migrated: "done",
+    stack: "done",
+    planned: "done",
+    generated: "current",
+    tools: "pending",
+    validated: "pending",
+    repaired: "pending",
+    ready: "pending",
+  });
   const payload = await requestPreview({
     idea: baseIdea,
     selectedStack,
@@ -693,6 +806,13 @@ async function generatePreviewFromCurrentState(successMessage) {
   selectedStack = payload.selectedStack || selectedStack;
   renderPreview(payload);
   applySelectedStackToControls(selectedStack);
+  setAgentActivity({
+    generated: "done",
+    tools: "done",
+    validated: "done",
+    repaired: "done",
+    ready: "done",
+  });
   setStatus(successMessage, "success");
   return payload;
 }
@@ -705,6 +825,7 @@ function resetAll() {
   currentPreview = null;
   selectedStack = getDefaultStackState();
   resetQuestionFlow();
+  resetAgentActivity();
 
   ideaInput.value = "";
   clearStatus();
@@ -733,6 +854,9 @@ function resetAll() {
   clearCollection(detectedChoicesList);
   stackChips.replaceChildren();
   clearCollection(selectedStackList);
+  clearCollection(toolRecommendationList);
+  clearCollection(stackAnalysisList);
+  clearCollection(migrationSummaryList);
   clearCollection(chosenStackList);
   clearCollection(assumptionsList);
   clearCollection(architectureList);
@@ -752,6 +876,15 @@ function resetAll() {
 
 function renderPreview(preview) {
   previewSection.hidden = false;
+  setAgentActivity({
+    understood: "done",
+    stack: "done",
+    planned: "done",
+    generated: "done",
+    validated: "done",
+    repaired: "done",
+    ready: "done",
+  });
   projectNameHeading.textContent = preview.projectName || "Generated Project";
   summaryText.textContent = preview.summary || "No summary available.";
   problemStatementText.textContent = preview.problemStatement || "No problem statement available.";
@@ -760,6 +893,9 @@ function renderPreview(preview) {
   renderList(detectedChoicesList, preview.detectedUserChoices, "No explicit user choices detected.");
   renderStackChips(preview.selectedStack || getDefaultStackState());
   renderStackSummary(selectedStackList, preview.selectedStack || getDefaultStackState());
+  renderToolRecommendations(preview);
+  renderStackAnalysis(preview.stackAnalysis || {});
+  renderMigrationSummary(preview.migrationSummary || {});
   renderList(chosenStackList, preview.chosenStack, "No chosen stack details available.");
   renderList(assumptionsList, preview.assumptions, "No assumptions recorded.");
   renderList(architectureList, preview.architecture, "No architecture details available.");
@@ -770,6 +906,63 @@ function renderPreview(preview) {
   renderEnvVariables(preview.envVariables || []);
   renderModules(preview.modules || []);
   renderFiles(preview.files || []);
+}
+
+function renderToolRecommendations(preview) {
+  const items = [];
+  if (preview.recommendedIde) {
+    items.push(`Recommended IDE: ${preview.recommendedIde}`);
+  }
+  if (preview.alternativeIde) {
+    items.push(`Alternative IDE: ${preview.alternativeIde}`);
+  }
+  if (Array.isArray(preview.runtimeTools) && preview.runtimeTools.length) {
+    items.push(`Runtime Tools: ${preview.runtimeTools.join(", ")}`);
+  }
+  if (preview.packageManager) {
+    items.push(`Package Manager: ${preview.packageManager}`);
+  }
+  renderList(toolRecommendationList, items, "No IDE recommendation available.");
+}
+
+function renderStackAnalysis(stackAnalysis) {
+  const items = [];
+  if (stackAnalysis.detectedLanguage) {
+    items.push(`Language: ${stackAnalysis.detectedLanguage}`);
+  }
+  if (stackAnalysis.detectedFramework) {
+    items.push(`Framework: ${stackAnalysis.detectedFramework}`);
+  }
+  if (stackAnalysis.projectType) {
+    items.push(`Project Type: ${stackAnalysis.projectType}`);
+  }
+  if (stackAnalysis.architecturePattern) {
+    items.push(`Architecture Pattern: ${stackAnalysis.architecturePattern}`);
+  }
+  renderList(stackAnalysisList, items, "No existing source stack was detected.");
+}
+
+function renderMigrationSummary(migrationSummary) {
+  const items = [];
+  if (migrationSummary.sourceLanguage || migrationSummary.sourceFramework) {
+    items.push(
+      `Source Stack: ${migrationSummary.sourceLanguage || "Unknown"} / ${migrationSummary.sourceFramework || "Unknown"}`,
+    );
+  }
+  if (migrationSummary.targetLanguage || migrationSummary.targetFramework) {
+    items.push(
+      `Target Stack: ${migrationSummary.targetLanguage || "Unknown"} / ${migrationSummary.targetFramework || "Unknown"}`,
+    );
+  }
+  if (migrationSummary.targetProjectType) {
+    items.push(`Target Project Type: ${migrationSummary.targetProjectType}`);
+  }
+  if (Array.isArray(migrationSummary.keyChanges) && migrationSummary.keyChanges.length) {
+    migrationSummary.keyChanges.forEach((item) => {
+      items.push(`Change: ${item}`);
+    });
+  }
+  renderList(migrationSummaryList, items, "No migration was needed for this project.");
 }
 
 function renderStackChips(stack) {

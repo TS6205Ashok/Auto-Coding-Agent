@@ -13,6 +13,7 @@ SYSTEM_FILENAMES = {
     "README.md",
     "PROJECT_EXPLANATION.md",
     "SETUP_INSTRUCTIONS.md",
+    "FULL_RUNTIME_INSTRUCTIONS.md",
     "FILE_STRUCTURE.md",
     "PACKAGE_REQUIREMENTS.md",
     "REQUIRED_INPUTS.md",
@@ -111,6 +112,25 @@ def build_required_docs(
         preview.get("problemStatement") or "No problem statement was provided by the model."
     ).strip()
     selected_stack = preview.get("selectedStack") or {}
+    recommended_ide = str(preview.get("recommendedIde") or "").strip()
+    alternative_ide = str(preview.get("alternativeIde") or "").strip()
+    runtime_tools = _listify(preview.get("runtimeTools"))
+    package_manager = str(preview.get("packageManager") or "").strip()
+    migration_summary = preview.get("migrationSummary") or {}
+    full_runtime_instructions = _build_full_runtime_instructions(
+        project_name=project_name,
+        summary=summary,
+        problem_statement=problem_statement,
+        selected_stack=selected_stack,
+        recommended_ide=recommended_ide,
+        alternative_ide=alternative_ide,
+        runtime_tools=runtime_tools,
+        package_manager=package_manager,
+        install_commands=install_commands,
+        run_commands=run_commands,
+        required_inputs=required_inputs,
+        migration_summary=migration_summary,
+    )
 
     readme = "\n".join(
         [
@@ -126,6 +146,14 @@ def build_required_docs(
             "",
             "## Selected Stack",
             _selected_stack_text(selected_stack),
+            "",
+            "## Recommended IDE And Tools",
+            _tool_recommendation_text(
+                recommended_ide,
+                alternative_ide,
+                runtime_tools,
+                package_manager,
+            ),
             "",
             "## Chosen Stack",
             _bullet_text(chosen_stack, "The generated plan did not include stack details."),
@@ -146,6 +174,7 @@ def build_required_docs(
             "Fill `.env` from `.env.example`, then run the setup script before starting the project.",
             "- Windows: `setup.bat`",
             "- Mac/Linux: `setup.sh`",
+            "- Full guided setup: `FULL_RUNTIME_INSTRUCTIONS.md`",
             "",
             "## How To Run",
             _bullet_text(run_commands, "No run commands were provided."),
@@ -157,6 +186,8 @@ def build_required_docs(
             "",
             "## Notes",
             _bullet_text(assumptions, "No assumptions were recorded."),
+            "",
+            _migration_readme_block(migration_summary),
         ]
     ).strip() + "\n"
 
@@ -217,6 +248,14 @@ def build_required_docs(
             "## Run Commands",
             _bullet_text(run_commands, "No run commands were provided."),
             "",
+            "## Recommended IDE And Tools",
+            _tool_recommendation_text(
+                recommended_ide,
+                alternative_ide,
+                runtime_tools,
+                package_manager,
+            ),
+            "",
             "## Environment Variables",
             _env_variables_text(env_variables),
             "",
@@ -275,11 +314,14 @@ def build_required_docs(
         "README.md": readme,
         "PROJECT_EXPLANATION.md": explanation,
         "SETUP_INSTRUCTIONS.md": setup_instructions,
+        "FULL_RUNTIME_INSTRUCTIONS.md": full_runtime_instructions,
         "FILE_STRUCTURE.md": structure,
         "PACKAGE_REQUIREMENTS.md": package_docs,
         "REQUIRED_INPUTS.md": required_inputs_doc,
         ".env.example": build_env_example(required_inputs),
     }
+    if isinstance(migration_summary, Mapping) and migration_summary:
+        docs["MIGRATION_SUMMARY.md"] = _build_migration_summary_doc(migration_summary)
 
     return docs
 
@@ -594,6 +636,435 @@ def required_preview_paths(
     paths = set(_required_runtime_paths(selected_stack, project_kind, template_family=template_family))
     paths.update(SYSTEM_FILENAMES)
     return paths
+
+
+def collect_preview_validation_findings(
+    preview: Mapping[str, Any],
+    *,
+    selected_stack: Mapping[str, Any],
+    project_kind: Mapping[str, Any],
+    template_family: str = "",
+) -> list[str]:
+    findings: list[str] = []
+    try:
+        normalized_files = validate_generated_files(_normalize_preview_files(preview.get("files")))
+    except ValueError as exc:
+        return [str(exc)]
+
+    file_map = {entry["path"]: entry["content"] for entry in normalized_files}
+    for required_path in sorted(required_preview_paths(selected_stack, project_kind, template_family)):
+        if required_path not in file_map:
+            findings.append(f"Missing required file: {required_path}")
+        elif not str(file_map[required_path]).strip():
+            findings.append(f"Required file is empty: {required_path}")
+
+    for entry_path in _entry_validation_paths(selected_stack, project_kind, template_family=template_family):
+        content = str(file_map.get(entry_path, ""))
+        if not content.strip() or not _valid_entry_file(entry_path, content):
+            findings.append(f"Invalid entry file: {entry_path}")
+
+    if project_kind.get("hasBackend"):
+        for endpoint_path in _backend_endpoint_paths(selected_stack, project_kind):
+            content = str(file_map.get(endpoint_path, ""))
+            if not content.strip() or not _valid_backend_endpoint_file(endpoint_path, content):
+                findings.append(f"Invalid backend endpoint file: {endpoint_path}")
+
+    if template_family == "puzzle-game":
+        if any(path.startswith("backend/") for path in file_map):
+            findings.append("Puzzle game preview must not include backend files.")
+        if "requirements.txt" in file_map:
+            findings.append("Puzzle game preview must not include requirements.txt.")
+        run_commands = [str(item).lower() for item in preview.get("runCommands", [])]
+        if any("uvicorn" in command for command in run_commands):
+            findings.append("Puzzle game preview must not include uvicorn run instructions.")
+        if any("python app/main.py" in command for command in run_commands):
+            findings.append("Puzzle game preview must not include backend python entrypoint instructions.")
+
+    recommended_ide = str(preview.get("recommendedIde") or "").strip()
+    if not recommended_ide:
+        findings.append("Recommended IDE metadata is missing from the preview.")
+    readme_text = str(file_map.get("README.md", ""))
+    if recommended_ide and readme_text and recommended_ide not in readme_text:
+        findings.append("README.md does not include the recommended IDE guidance.")
+    runtime_guide_text = str(file_map.get("FULL_RUNTIME_INSTRUCTIONS.md", ""))
+    if runtime_guide_text and not _valid_full_runtime_instructions(runtime_guide_text):
+        findings.append("FULL_RUNTIME_INSTRUCTIONS.md is missing required runtime guidance sections.")
+
+    migration_summary = preview.get("migrationSummary") or {}
+    if isinstance(migration_summary, Mapping) and migration_summary:
+        if "MIGRATION_SUMMARY.md" not in file_map:
+            findings.append("Migrated projects must include MIGRATION_SUMMARY.md.")
+
+    target_backend = str(selected_stack.get("backend") or "")
+    target_language = str(selected_stack.get("language") or "")
+    if target_language == "Python" or target_backend in {"FastAPI", "Flask"}:
+        if any(path.endswith("pom.xml") or path.endswith("Application.java") for path in file_map):
+            findings.append("Python targets must not include Spring Boot artifacts.")
+        if any(path.endswith("server.js") for path in file_map):
+            findings.append("Python targets must not include Node backend artifacts.")
+    if target_backend == "Spring Boot":
+        if any(path.endswith("server.js") for path in file_map):
+            findings.append("Spring Boot targets must not include Node backend artifacts.")
+    if target_backend == "Express":
+        if any(path.endswith("Application.java") or path.endswith("pom.xml") for path in file_map):
+            findings.append("Express targets must not include Spring Boot artifacts.")
+
+    return findings
+
+
+def _tool_recommendation_text(
+    recommended_ide: str,
+    alternative_ide: str,
+    runtime_tools: list[str],
+    package_manager: str,
+) -> str:
+    lines = [
+        f"- Recommended IDE: {recommended_ide or 'Not specified'}",
+        f"- Alternative IDE: {alternative_ide or 'Not specified'}",
+        f"- Runtime tools: {', '.join(runtime_tools) if runtime_tools else 'Not specified'}",
+        f"- Package manager: {package_manager or 'Not specified'}",
+    ]
+    return "\n".join(lines)
+
+
+def _migration_readme_block(migration_summary: Mapping[str, Any]) -> str:
+    if not isinstance(migration_summary, Mapping) or not migration_summary:
+        return ""
+    source_language = str(migration_summary.get("sourceLanguage") or "Unknown")
+    source_framework = str(migration_summary.get("sourceFramework") or "Unknown")
+    target_language = str(migration_summary.get("targetLanguage") or "Unknown")
+    target_framework = str(migration_summary.get("targetFramework") or "Unknown")
+    return "\n".join(
+        [
+            "## Migration Summary",
+            f"- Source stack: {source_language} / {source_framework}",
+            f"- Target stack: {target_language} / {target_framework}",
+            "- See `MIGRATION_SUMMARY.md` for the detailed migration notes.",
+        ]
+    )
+
+
+def _build_migration_summary_doc(migration_summary: Mapping[str, Any]) -> str:
+    changes = migration_summary.get("keyChanges")
+    lines = [
+        "# Migration Summary",
+        "",
+        f"- Source language: {str(migration_summary.get('sourceLanguage') or 'Unknown')}",
+        f"- Source framework: {str(migration_summary.get('sourceFramework') or 'Unknown')}",
+        f"- Source project type: {str(migration_summary.get('sourceProjectType') or 'Unknown')}",
+        f"- Target language: {str(migration_summary.get('targetLanguage') or 'Unknown')}",
+        f"- Target framework: {str(migration_summary.get('targetFramework') or 'Unknown')}",
+        f"- Target project type: {str(migration_summary.get('targetProjectType') or 'Unknown')}",
+        "",
+        "## Key Changes",
+        _bullet_text(_listify(changes), "No key migration changes were recorded."),
+        "",
+        "## Compatibility Notes",
+        "This starter rebuilds the project logic in the target stack using deterministic templates so the output remains runnable and consistent.",
+    ]
+    return "\n".join(lines).strip() + "\n"
+
+
+def _build_full_runtime_instructions(
+    *,
+    project_name: str,
+    summary: str,
+    problem_statement: str,
+    selected_stack: Mapping[str, Any],
+    recommended_ide: str,
+    alternative_ide: str,
+    runtime_tools: list[str],
+    package_manager: str,
+    install_commands: list[str],
+    run_commands: list[str],
+    required_inputs: list[dict[str, Any]],
+    migration_summary: Mapping[str, Any] | None,
+) -> str:
+    system_requirements = _system_requirements_text(selected_stack, runtime_tools)
+    extensions = _recommended_extensions_text(selected_stack)
+    runtime_input_text = _runtime_input_workflow_text(selected_stack, required_inputs)
+    expected_output = _expected_output_text(selected_stack)
+    reset_text = _reset_instructions_text(selected_stack)
+    migration_notes = _migration_notes_text(migration_summary)
+
+    sections = [
+        "# Full Runtime Instructions",
+        "",
+        "## 1. PROJECT OVERVIEW",
+        f"- Project: {project_name}",
+        f"- What this project does: {summary}",
+        "- Tech stack used:",
+        _selected_stack_text(dict(selected_stack)),
+        f"- What should happen when it runs successfully: {expected_output}",
+        "",
+        "## 2. RECOMMENDED IDE",
+        f"- Primary IDE: {recommended_ide or 'Not specified'}",
+        f"- Alternative IDE: {alternative_ide or 'Not specified'}",
+        "",
+        "## 3. REQUIRED EXTENSIONS / PLUGINS",
+        extensions,
+        "",
+        "## 4. SYSTEM REQUIREMENTS",
+        system_requirements,
+        "",
+        "## 5. STEP-BY-STEP SETUP INSTRUCTIONS",
+        "1. Open the unzipped project folder in your IDE.",
+        "2. Open the integrated terminal in the IDE.",
+        "3. Review `.env.example` and `REQUIRED_INPUTS.md` before starting.",
+        _setup_steps_text(selected_stack, install_commands),
+        "5. Save your changes and keep the terminal open for the run step.",
+        "",
+        "## 6. REQUIRED INPUTS (API KEYS / CONFIG)",
+        _required_inputs_summary(required_inputs),
+        "",
+        "## 7. HOW RUNTIME INPUT WORKS",
+        runtime_input_text,
+        "",
+        "## 8. HOW TO RUN THE PROJECT",
+        _run_instructions_text(selected_stack, run_commands),
+        "",
+        "## 9. EXPECTED OUTPUT",
+        f"- Success looks like this: {expected_output}",
+        f"- Problem statement handled by this starter: {problem_statement}",
+        "",
+        "## 10. TROUBLESHOOTING",
+        _troubleshooting_text(selected_stack, required_inputs, runtime_tools),
+        "",
+        "## 11. RESET INSTRUCTIONS",
+        reset_text,
+        "",
+        "## 12. MIGRATION NOTES",
+        migration_notes,
+        "",
+        f"- Package manager: {package_manager or 'Project-specific'}",
+    ]
+    return "\n".join(sections).strip() + "\n"
+
+
+def _system_requirements_text(
+    selected_stack: Mapping[str, Any],
+    runtime_tools: list[str],
+) -> str:
+    language = str(selected_stack.get("language") or "")
+    frontend = str(selected_stack.get("frontend") or "")
+    backend = str(selected_stack.get("backend") or "")
+    requirements = ["- Git and a terminal available inside your IDE."]
+    if language == "Python" or backend in {"FastAPI", "Flask"}:
+        requirements.append("- Python 3.10+ (3.11+ recommended).")
+    if language == "JavaScript" or frontend == "React" or backend in {"Express", "NestJS"}:
+        requirements.append("- Node.js 18+ (20+ recommended).")
+    if language == "Java" or backend == "Spring Boot":
+        requirements.append("- Java 17+ and Maven 3.9+.")
+    if runtime_tools:
+        requirements.append(f"- Runtime tools used by this stack: {', '.join(runtime_tools)}.")
+    return "\n".join(requirements)
+
+
+def _recommended_extensions_text(selected_stack: Mapping[str, Any]) -> str:
+    language = str(selected_stack.get("language") or "")
+    frontend = str(selected_stack.get("frontend") or "")
+    backend = str(selected_stack.get("backend") or "")
+    if language == "Python" or backend in {"FastAPI", "Flask"}:
+        return "\n".join(
+            [
+                "- VS Code: Python extension",
+                "- VS Code: Pylance",
+                "- PyCharm: Python support is built in",
+            ]
+        )
+    if language == "Java" or backend == "Spring Boot":
+        return "\n".join(
+            [
+                "- IntelliJ IDEA: Java support (built in)",
+                "- IntelliJ IDEA: Spring Boot plugin",
+                "- VS Code alternative: Extension Pack for Java",
+            ]
+        )
+    if language == "JavaScript" and frontend == "React":
+        return "\n".join(
+            [
+                "- VS Code: ESLint",
+                "- VS Code: JavaScript and TypeScript support",
+                "- VS Code: Live Server for static previews if needed",
+            ]
+        )
+    if language == "JavaScript" and backend in {"Express", "NestJS"}:
+        return "\n".join(
+            [
+                "- VS Code: ESLint",
+                "- VS Code: JavaScript and TypeScript support",
+            ]
+        )
+    return "- Use the default language support bundled with your IDE."
+
+
+def _setup_steps_text(
+    selected_stack: Mapping[str, Any],
+    install_commands: list[str],
+) -> str:
+    language = str(selected_stack.get("language") or "")
+    frontend = str(selected_stack.get("frontend") or "")
+    backend = str(selected_stack.get("backend") or "")
+    commands = install_commands or []
+    lines = []
+    if backend in {"FastAPI", "Flask"} or language == "Python":
+        lines.extend(
+            [
+                "4. Create or activate a Python environment if needed, then install dependencies.",
+                "   - Example: `pip install -r requirements.txt`",
+            ]
+        )
+    elif backend == "Spring Boot" or language == "Java":
+        lines.extend(
+            [
+                "4. Install Java dependencies with Maven.",
+                "   - Example: `mvn install`",
+            ]
+        )
+    elif frontend == "React" or backend in {"Express", "NestJS"} or language == "JavaScript":
+        lines.extend(
+            [
+                "4. Install JavaScript dependencies.",
+                "   - Example: `npm install`",
+            ]
+        )
+    else:
+        lines.append("4. Install the dependencies listed in this project before running it.")
+    for command in commands:
+        if command not in {"setup.bat", "./setup.sh"}:
+            lines.append(f"   - Alternate command: `{command}`")
+    return "\n".join(lines)
+
+
+def _runtime_input_workflow_text(
+    selected_stack: Mapping[str, Any],
+    required_inputs: list[dict[str, Any]],
+) -> str:
+    backend = str(selected_stack.get("backend") or "")
+    if not required_inputs:
+        return "- No required inputs are needed for this project. You can run it without creating a custom `.env` file."
+    if backend in {"FastAPI", "Flask"}:
+        return "\n".join(
+            [
+                "- If a required value is missing from the environment, the backend will prompt for it in the terminal.",
+                "- Enter the value when asked and the application will continue starting.",
+                "- You can avoid repeated prompts by copying `.env.example` to `.env` and filling the values there.",
+            ]
+        )
+    return "\n".join(
+        [
+            "- Use `.env.example` to create a `.env` file if the project expects configuration values.",
+            "- If a runtime prompt is implemented for this stack, enter the requested value in the terminal and execution will continue.",
+        ]
+    )
+
+
+def _run_instructions_text(
+    selected_stack: Mapping[str, Any],
+    run_commands: list[str],
+) -> str:
+    backend = str(selected_stack.get("backend") or "")
+    frontend = str(selected_stack.get("frontend") or "")
+    lines = [
+        "- Windows: `run.bat`",
+        "- Mac/Linux: `chmod +x run.sh` then `./run.sh`",
+    ]
+    if backend in {"FastAPI", "Flask"}:
+        lines.append("- Manual backend run: `python app/main.py` or `python backend/app/main.py` depending on the generated layout.")
+    elif backend == "Spring Boot":
+        lines.append("- Manual backend run: `mvn spring-boot:run`")
+    elif frontend == "HTML/CSS/JavaScript":
+        lines.append("- Static app option: open `index.html` directly in a browser.")
+    for command in run_commands:
+        if command not in {"run.bat", "./run.sh"}:
+            lines.append(f"- Additional run command: `{command}`")
+    return "\n".join(lines)
+
+
+def _expected_output_text(selected_stack: Mapping[str, Any]) -> str:
+    frontend = str(selected_stack.get("frontend") or "")
+    backend = str(selected_stack.get("backend") or "")
+    if frontend == "HTML/CSS/JavaScript" and backend in {"", "None"}:
+        return "The browser opens the project and the interface is interactive immediately."
+    if frontend not in {"", "None", "Auto"} and backend not in {"", "None", "Auto"}:
+        return "The backend server starts, the frontend opens or becomes available locally, and the UI can talk to the API."
+    if backend not in {"", "None", "Auto"}:
+        return "The server starts successfully and responds in the terminal and browser/API client."
+    return "The generated application starts and shows its starter interface or output."
+
+
+def _troubleshooting_text(
+    selected_stack: Mapping[str, Any],
+    required_inputs: list[dict[str, Any]],
+    runtime_tools: list[str],
+) -> str:
+    lines = [
+        "- If the project does not start, confirm the required dependencies were installed successfully.",
+        "- Verify the required language/runtime versions from the System Requirements section.",
+        "- Restart the IDE terminal and run the setup and run steps again.",
+    ]
+    if required_inputs:
+        lines.extend(
+            [
+                "- If an API or configuration error occurs, check the values in `.env` or re-enter them when prompted.",
+                "- Ensure your internet connection is available for any external API integrations.",
+            ]
+        )
+    if runtime_tools:
+        lines.append(f"- Confirm these runtime tools are installed and available: {', '.join(runtime_tools)}.")
+    lines.extend(
+        [
+            "- If an unknown error occurs: stop the program, return to the setup steps, rerun them from the beginning, then start the project again.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _reset_instructions_text(selected_stack: Mapping[str, Any]) -> str:
+    backend = str(selected_stack.get("backend") or "")
+    frontend = str(selected_stack.get("frontend") or "")
+    lines = [
+        "- Delete the `.env` file if you want the project to prompt for values again.",
+        "- Reinstall dependencies using the setup instructions if the environment became inconsistent.",
+        "- Run the project again after the reset steps complete.",
+    ]
+    if backend in {"Express", "NestJS"} or frontend == "React":
+        lines.append("- If needed, delete `node_modules` and reinstall with `npm install`.")
+    if backend == "Spring Boot":
+        lines.append("- If needed, run `mvn clean` before starting again.")
+    return "\n".join(lines)
+
+
+def _migration_notes_text(migration_summary: Mapping[str, Any] | None) -> str:
+    if not isinstance(migration_summary, Mapping) or not migration_summary:
+        return "- This project was not migrated from another stack."
+    source = f"{str(migration_summary.get('sourceLanguage') or 'Unknown')} / {str(migration_summary.get('sourceFramework') or 'Unknown')}"
+    target = f"{str(migration_summary.get('targetLanguage') or 'Unknown')} / {str(migration_summary.get('targetFramework') or 'Unknown')}"
+    key_changes = _bullet_text(_listify(migration_summary.get("keyChanges")), "No migration changes were recorded.")
+    return "\n".join(
+        [
+            f"- Original stack: {source}",
+            f"- New stack: {target}",
+            "- Key changes:",
+            key_changes,
+            "- Limitations: this is a runnable rebuilt starter in the target stack, not a byte-for-byte source translation.",
+        ]
+    )
+
+
+def _valid_full_runtime_instructions(content: str) -> bool:
+    lowered = content.lower()
+    required_markers = [
+        "project overview",
+        "recommended ide",
+        "step-by-step setup instructions",
+        "required inputs",
+        "how runtime input works",
+        "how to run the project",
+        "troubleshooting",
+        "reset instructions",
+    ]
+    return all(marker in lowered for marker in required_markers)
 
 
 def _build_standard_files(
@@ -1816,8 +2287,6 @@ public class Application {
     public static void main(String[] args) {
         SpringApplication.run(Application.class, args);
     }
-    files.update(_build_backend_subproject_scripts("Spring Boot", prefix))
-    return files
 }
 """,
         _prefixed(java_base, "controller/AppController.java"): """package com.example.demo.controller;
@@ -1881,6 +2350,8 @@ public class AppRepository {
 server.port=8080
 """,
     }
+    files.update(_build_backend_subproject_scripts("Spring Boot", prefix))
+    return files
 
 
 def _build_root_scripts(

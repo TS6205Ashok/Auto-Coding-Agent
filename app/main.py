@@ -13,7 +13,6 @@ from pydantic import BaseModel, Field
 
 from .services.agent_controller import agent_controller
 from .services.file_service import ensure_within_directory
-from .services.zip_service import create_project_zip
 
 
 load_dotenv()
@@ -106,6 +105,14 @@ class FilePayload(BaseModel):
 
 class PreviewPayload(BaseModel):
     projectName: str
+    projectType: str = ""
+    templateFamily: str = ""
+    recommendedIde: str = ""
+    alternativeIde: str = ""
+    runtimeTools: list[str] = Field(default_factory=list)
+    packageManager: str = ""
+    migrationSummary: dict[str, Any] = Field(default_factory=dict)
+    stackAnalysis: dict[str, Any] = Field(default_factory=dict)
     detectedUserChoices: list[str] = Field(default_factory=list)
     selectedStack: StackSelectionPayload = Field(default_factory=StackSelectionPayload)
     chosenStack: list[str] = Field(default_factory=list)
@@ -143,11 +150,11 @@ async def suggest_project(payload: SuggestRequest) -> JSONResponse:
         raise HTTPException(status_code=400, detail="Please enter a project idea.")
 
     try:
-        preview = await agent_controller.generate_files(
+        preview = await agent_controller.build_preview(
             idea,
-            payload.selectedStack.model_dump() if payload.selectedStack else None,
-            payload.generationMode,
-            payload.finalRequirements,
+            generation_mode=payload.generationMode,
+            selected_stack=payload.selectedStack.model_dump() if payload.selectedStack else None,
+            final_requirements=payload.finalRequirements,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -181,8 +188,7 @@ async def finalize_agent(payload: AgentFinalizeRequest) -> JSONResponse:
 @app.post("/api/zip")
 async def build_zip(payload: ZipRequest) -> JSONResponse:
     try:
-        normalized_preview = agent_controller.validate_project(payload.preview.model_dump())
-        result = create_project_zip(normalized_preview, GENERATED_DIR)
+        result = agent_controller.package_zip(payload.preview.model_dump(), GENERATED_DIR)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except OSError as exc:
