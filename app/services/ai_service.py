@@ -23,7 +23,7 @@ load_dotenv()
 
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 DEFAULT_OLLAMA_MODEL = "qwen2.5-coder"
-FAST_PLANNER_TIMEOUT_SECONDS = 22.0
+FAST_PLANNER_TIMEOUT_SECONDS = 4.0
 DEEP_PREVIEW_TIMEOUT_SECONDS = 70.0
 MIN_CUSTOM_PASS_SECONDS = 8.0
 MAX_CUSTOM_FILES = 8
@@ -406,11 +406,13 @@ async def call_ollama_json(
     base_url = configured_base_url.rstrip("/")
     model = os.getenv("OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL).strip() or DEFAULT_OLLAMA_MODEL
     safe_timeout = max(1.0, timeout_seconds)
+    if enforce_compact_output:
+        safe_timeout = min(safe_timeout, 3.0)
     request_timeout = httpx.Timeout(
-        connect=min(3.5, safe_timeout),
+        connect=min(1.0 if enforce_compact_output else 3.5, safe_timeout),
         read=safe_timeout,
-        write=min(5.0, safe_timeout),
-        pool=min(5.0, safe_timeout),
+        write=min(2.0 if enforce_compact_output else 5.0, safe_timeout),
+        pool=min(2.0 if enforce_compact_output else 5.0, safe_timeout),
     )
 
     try:

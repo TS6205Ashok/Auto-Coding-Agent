@@ -332,10 +332,12 @@ class AgentController:
             validated_preview = self.validate_project(preview)
             file_count, injected_paths = self._preview_generation_stats(preview, validated_preview)
             total_duration = time.perf_counter() - preview_started_at
+            template_family = str(validated_preview.get("templateFamily") or ai.category_template_family(context.project_category) or "generic").strip()
             logger.info(
-                "project_preview_auto_mode mode=%s category=%s planner_duration=%.2fs total_duration=%.2fs fallback_used=%s file_count=%s injected_required_files=%s",
+                "project_preview_auto_mode mode=%s category=%s template=%s planner_duration=%.2fs total_duration=%.2fs fallback_used=%s file_count=%s injected_required_files=%s",
                 context.generation_mode,
                 context.project_category,
+                template_family,
                 0.0,
                 total_duration,
                 False,
@@ -386,9 +388,12 @@ class AgentController:
             validated_preview = self.validate_project(preview)
             file_count, injected_paths = self._preview_generation_stats(preview, validated_preview)
             total_duration = time.perf_counter() - preview_started_at
+            template_family = str(validated_preview.get("templateFamily") or ai.category_template_family(context.project_category) or "generic").strip()
             logger.info(
-                "project_preview_complete mode=%s planner_duration=%.2fs total_duration=%.2fs fallback_used=%s file_count=%s injected_required_files=%s",
+                "project_preview_complete mode=%s category=%s template=%s planner_duration=%.2fs total_duration=%.2fs fallback_used=%s file_count=%s injected_required_files=%s",
                 context.generation_mode,
+                context.project_category or context.project_kind.get("label", ""),
+                template_family,
                 planner_duration,
                 total_duration,
                 False,
@@ -403,9 +408,12 @@ class AgentController:
             validated_preview = self.validate_project(preview)
             file_count, injected_paths = self._preview_generation_stats(preview, validated_preview)
             total_duration = time.perf_counter() - preview_started_at
+            template_family = str(validated_preview.get("templateFamily") or ai.category_template_family(context.project_category) or "generic").strip()
             logger.warning(
-                "project_preview_fallback mode=%s planner_duration=%.2fs total_duration=%.2fs fallback_used=%s file_count=%s injected_required_files=%s reason=%s",
+                "project_preview_fallback mode=%s category=%s template=%s planner_duration=%.2fs total_duration=%.2fs fallback_used=%s file_count=%s injected_required_files=%s reason=%s",
                 context.generation_mode,
+                context.project_category or context.project_kind.get("label", ""),
+                template_family,
                 planner_duration,
                 total_duration,
                 True,

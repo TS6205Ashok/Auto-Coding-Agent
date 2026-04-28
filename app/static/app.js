@@ -242,7 +242,7 @@ async function handleGenerateImmediately() {
     selectedStack = payload.selectedStack || selectedStack;
     applySelectedStackToControls(selectedStack);
     renderPreview(payload);
-    setStatus("Runnable starter generated. You can regenerate, ask questions, or create the ZIP.", "success");
+    setStatus("Project preview is ready. You can regenerate, ask questions, or create the ZIP.", "success");
   } catch (error) {
     currentPreview = null;
     previewSection.hidden = true;

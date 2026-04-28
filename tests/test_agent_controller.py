@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -198,6 +199,41 @@ class AgentControllerTests(unittest.TestCase):
         self.assertIn("input(prompt).strip()", file_map["backend/app/config.py"])
         self.assertIn("python app/main.py", file_map["backend/run.bat"])
         self.assertIn("OPENAI_API_KEY=", file_map[".env.example"])
+
+    def test_suggest_builds_generic_starter_from_unknown_prompt(self) -> None:
+        with patch.dict(os.environ, {"OLLAMA_BASE_URL": ""}, clear=False):
+            response = self.client.post(
+                "/api/suggest",
+                json={"idea": "Build something", "generationMode": "fast"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        preview = response.json()
+        file_map = {item["path"]: item["content"] for item in preview.get("files", [])}
+
+        self.assertGreaterEqual(len(preview.get("files", [])), 10)
+        self.assertIn("backend/app/main.py", file_map)
+        self.assertIn("frontend/src/App.jsx", file_map)
+        self.assertIn("README.md", file_map)
+        self.assertIn("run.bat", file_map)
+        self.assertTrue(all(str(content).strip() for content in file_map.values()))
+
+    def test_fast_mode_unreachable_ollama_falls_back_under_five_seconds(self) -> None:
+        with patch.dict(os.environ, {"OLLAMA_BASE_URL": "http://127.0.0.1:11434"}, clear=False):
+            started_at = time.perf_counter()
+            preview = asyncio.run(
+                agent_controller.generate_files(
+                    "Build something",
+                    generation_mode="fast",
+                )
+            )
+            elapsed = time.perf_counter() - started_at
+
+        self.assertLess(elapsed, 5.0)
+        self.assertTrue(preview["files"])
+        self.assertTrue(
+            any("fallback" in item.lower() or "template" in item.lower() for item in preview["assumptions"])
+        )
 
     def test_suggest_returns_complete_buildable_preview_files(self) -> None:
         with patch.dict(os.environ, {"OLLAMA_BASE_URL": ""}, clear=False):
