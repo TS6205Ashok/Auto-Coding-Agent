@@ -5,6 +5,7 @@ from typing import Any, Mapping
 
 from app.agents.context import AgentWorkflowContext
 from app.services import ai_service as ai
+from app.services.architecture_registry import forbidden_path
 
 
 logger = logging.getLogger(__name__)
@@ -92,20 +93,27 @@ class RepairAgent:
 
         target_backend = str(context.selected_stack.get("backend") or "")
         target_language = str(context.selected_stack.get("language") or "")
+        forbidden_files = context.final_architecture.forbidden_files if context.final_architecture else []
         filtered_files: list[dict[str, Any]] = []
         for file_entry in preview.get("files", []):
             if not isinstance(file_entry, Mapping):
                 continue
             path = str(file_entry.get("path") or "").strip()
+            if forbidden_files and forbidden_path(path, forbidden_files):
+                continue
             lower = path.lower()
             if target_language == "Python" or target_backend in {"FastAPI", "Flask"}:
                 if lower.endswith("pom.xml") or "src/main/java/" in lower or lower.endswith("server.js"):
                     continue
+                if target_backend == "Flask" and "fastapi" in str(file_entry.get("content") or "").lower():
+                    continue
+                if target_backend == "FastAPI" and "from flask" in str(file_entry.get("content") or "").lower():
+                    continue
             if target_backend == "Express":
-                if lower.endswith("pom.xml") or "src/main/java/" in lower:
+                if lower.endswith("pom.xml") or "src/main/java/" in lower or lower.endswith("requirements.txt"):
                     continue
             if target_backend == "Spring Boot":
-                if lower.endswith("server.js"):
+                if lower.endswith("server.js") or lower.endswith(".py") or lower.endswith("requirements.txt"):
                     continue
             filtered_files.append(dict(file_entry))
         preview["files"] = filtered_files

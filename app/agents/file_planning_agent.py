@@ -5,6 +5,7 @@ from typing import Any, Mapping
 
 from app.agents.context import AgentWorkflowContext
 from app.services import ai_service as ai
+from app.services.architecture_registry import build_final_architecture_decision
 
 
 logger = logging.getLogger(__name__)
@@ -23,17 +24,31 @@ class FilePlanningAgent:
             or ai.detect_user_choices(context.prompt)
         )
         context.detected_user_choices = detected_choices
-        context.selected_stack = ai.resolve_selected_stack(
-            context.prompt,
-            context.requested_stack,
-            raw.get("selectedStack") or context.selected_stack,
-            detected_choices,
-        )
+        if context.final_architecture is None:
+            inferred_stack = ai.resolve_selected_stack(
+                context.prompt,
+                context.requested_stack,
+                context.selected_stack or raw.get("selectedStack"),
+                detected_choices,
+            )
+            context.final_architecture = build_final_architecture_decision(
+                prompt=context.generation_context or context.prompt,
+                requested_stack=context.requested_stack,
+                inferred_stack=inferred_stack,
+                declared_project_type=raw.get("projectType") or context.declared_project_type,
+                project_category=context.project_category,
+                migration_summary=context.migration_summary,
+                is_migrated=context.migration_active or context.migration_requested,
+            )
+        context.selected_stack = context.final_architecture.selected_stack
         context.project_kind = ai.determine_project_kind(
             context.selected_stack,
-            raw.get("projectType") or context.declared_project_type,
+            context.final_architecture.project_type or raw.get("projectType") or context.declared_project_type,
         )
-        context.template_family = str(raw.get("templateFamily") or context.template_family or "").strip()
+        if context.final_architecture.stack_family == "static_frontend" and context.final_architecture.project_type == "game_or_puzzle":
+            context.template_family = "puzzle-game"
+        else:
+            context.template_family = str(context.template_family or raw.get("templateFamily") or "").strip()
         context.project_name = ai.clean_project_name(raw.get("projectName"), context.prompt)
 
         if context.template_family == "puzzle-game":
@@ -45,18 +60,9 @@ class FilePlanningAgent:
             context.modules = ai.normalize_modules(raw.get("modules")) or template_metadata.get("modules", [])
             context.required_inputs = ai.normalize_required_inputs(raw.get("requiredInputs")) or template_metadata.get("requiredInputs", [])
             context.env_variables = ai.normalize_env_variables(raw.get("envVariables")) or template_metadata.get("envVariables", [])
-            context.package_requirements = ai.dedupe_list(
-                ai.normalize_string_list(raw.get("packageRequirements"))
-                or list(template_metadata.get("packageRequirements", []))
-            )
-            context.install_commands = ai.dedupe_list(
-                ai.normalize_string_list(raw.get("installCommands"))
-                or list(template_metadata.get("installCommands", []))
-            )
-            context.run_commands = ai.dedupe_list(
-                ai.normalize_string_list(raw.get("runCommands"))
-                or list(template_metadata.get("runCommands", []))
-            )
+            context.package_requirements = list(context.final_architecture.package_requirements)
+            context.install_commands = list(context.final_architecture.install_commands)
+            context.run_commands = list(context.final_architecture.run_commands)
             context.summary = (
                 str(raw.get("summary") or "").strip()
                 or str(template_metadata.get("summary") or "").strip()
@@ -88,18 +94,9 @@ class FilePlanningAgent:
                 ai.normalize_env_variables(raw.get("envVariables")),
                 ai.required_inputs_to_env_variables(context.required_inputs),
             )
-            context.package_requirements = ai.dedupe_list(
-                ai.normalize_string_list(raw.get("packageRequirements"))
-                + ai.build_package_requirements(context.selected_stack, context.project_kind)
-            )
-            context.install_commands = ai.dedupe_list(
-                ai.normalize_string_list(raw.get("installCommands"))
-                + ai.build_install_commands(context.selected_stack, context.project_kind)
-            )
-            context.run_commands = ai.dedupe_list(
-                ai.normalize_string_list(raw.get("runCommands"))
-                + ai.build_run_commands(context.selected_stack, context.project_kind)
-            )
+            context.package_requirements = list(context.final_architecture.package_requirements)
+            context.install_commands = list(context.final_architecture.install_commands)
+            context.run_commands = list(context.final_architecture.run_commands)
             context.summary = (
                 str(raw.get("summary") or "").strip()
                 or ai.build_summary(
@@ -134,13 +131,7 @@ class FilePlanningAgent:
         context.architecture = ai.dedupe_list(
             ai.normalize_string_list(raw.get("architecture")) + context.architecture
         )
-        context.file_manifest = sorted(
-            ai.required_preview_paths(
-                context.selected_stack,
-                context.project_kind,
-                context.template_family,
-            )
-        )
+        context.file_manifest = sorted(context.final_architecture.required_files)
         logger.info(
             "FilePlanningAgent planned files template=%s file_manifest_count=%s modules=%s",
             context.template_family or "generic",

@@ -10,6 +10,19 @@ logger = logging.getLogger(__name__)
 
 class ToolRecommendationAgent:
     def run(self, context: AgentWorkflowContext) -> AgentWorkflowContext:
+        if context.final_architecture:
+            context.recommended_ide = context.final_architecture.recommended_ide
+            context.alternative_ide = context.final_architecture.alternative_ide
+            context.runtime_tools = list(context.final_architecture.runtime_tools)
+            context.package_manager = context.final_architecture.package_manager
+            logger.info(
+                "ToolRecommendationAgent selected ide=%s alternative=%s package_manager=%s",
+                context.recommended_ide,
+                context.alternative_ide,
+                context.package_manager,
+            )
+            return context
+
         language = str(context.selected_stack.get("language") or "")
         frontend = str(context.selected_stack.get("frontend") or "")
         backend = str(context.selected_stack.get("backend") or "")

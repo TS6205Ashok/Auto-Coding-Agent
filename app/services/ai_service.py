@@ -1361,12 +1361,24 @@ def normalize_preview(
     detected_choices = dedupe_list(
         normalize_string_list(raw.get("detectedUserChoices")) or detect_user_choices(idea)
     )
+    final_architecture = raw.get("finalArchitecture") if isinstance(raw.get("finalArchitecture"), Mapping) else {}
     selected_stack = resolve_selected_stack(
         idea=idea,
         requested_stack=requested,
         model_stack=raw.get("selectedStack"),
         detected_choices=detected_choices,
     )
+    if final_architecture:
+        selected_stack = normalize_stack_selection(
+            {
+                "language": final_architecture.get("language"),
+                "frontend": final_architecture.get("frontend"),
+                "backend": final_architecture.get("backend"),
+                "database": final_architecture.get("database"),
+                "aiTools": final_architecture.get("ai_tools") or final_architecture.get("aiTools"),
+                "deployment": final_architecture.get("deployment"),
+            }
+        )
     project_kind = determine_project_kind(selected_stack, raw.get("projectType"))
     project_name = clean_project_name(raw.get("projectName"), idea)
 
@@ -1399,18 +1411,23 @@ def normalize_preview(
             normalize_env_variables(raw.get("envVariables")),
             required_inputs_to_env_variables(required_inputs),
         )
-        package_requirements = dedupe_list(
-            normalize_string_list(raw.get("packageRequirements"))
-            + build_package_requirements(selected_stack, project_kind)
-        )
-        install_commands = dedupe_list(
-            normalize_string_list(raw.get("installCommands"))
-            + build_install_commands(selected_stack, project_kind)
-        )
-        run_commands = dedupe_list(
-            normalize_string_list(raw.get("runCommands"))
-            + build_run_commands(selected_stack, project_kind)
-        )
+        if final_architecture:
+            package_requirements = normalize_string_list(final_architecture.get("package_requirements"))
+            install_commands = normalize_string_list(final_architecture.get("install_commands"))
+            run_commands = normalize_string_list(final_architecture.get("run_commands"))
+        else:
+            package_requirements = dedupe_list(
+                normalize_string_list(raw.get("packageRequirements"))
+                + build_package_requirements(selected_stack, project_kind)
+            )
+            install_commands = dedupe_list(
+                normalize_string_list(raw.get("installCommands"))
+                + build_install_commands(selected_stack, project_kind)
+            )
+            run_commands = dedupe_list(
+                normalize_string_list(raw.get("runCommands"))
+                + build_run_commands(selected_stack, project_kind)
+            )
 
     custom_manifest = normalize_custom_manifest(raw.get("customFiles"), selected_stack, project_kind)
     validated_files = finalize_preview_files(
@@ -1481,6 +1498,9 @@ def normalize_preview(
         "packageManager",
         "migrationSummary",
         "stackAnalysis",
+        "finalArchitecture",
+        "stackSelectionSource",
+        "isUserConfirmedStack",
     ):
         if passthrough_key in raw:
             preview_payload[passthrough_key] = raw.get(passthrough_key)

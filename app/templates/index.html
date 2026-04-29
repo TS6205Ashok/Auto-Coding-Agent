@@ -12,8 +12,7 @@
       <p class="eyebrow">Project Agent</p>
       <h1>Agent-guided project architecture for runnable starter apps.</h1>
       <p class="hero-copy">
-        Describe your idea, let the agent identify missing architecture decisions,
-        review the recommended stack, then generate, validate, preview, and export.
+        Describe your idea, answer the agent questions one by one, then generate a runnable starter.
       </p>
     </section>
 
@@ -23,7 +22,7 @@
           <p class="section-label">Idea Input</p>
           <h2>Start with the product idea</h2>
         </div>
-        <p class="section-note">Generate a runnable starter immediately from one prompt. Questions are optional if you want extra refinement.</p>
+        <p class="section-note">The agent will ask focused questions before generation. Use the stack suggestion button if you do not want to choose technologies manually.</p>
       </div>
 
       <label class="field-label" for="ideaInput">Describe what you want to build, paste old code, or describe an existing project</label>
@@ -49,9 +48,41 @@
         </label>
       </div>
 
+      <details id="advancedStackSection" class="advanced-stack" hidden>
+        <summary>Choose Tech Stack</summary>
+        <p class="section-note">Pick the stack manually, or leave values as Auto and let the generator fill the missing pieces.</p>
+        <div class="stack-grid">
+          <label class="select-field">
+            <span>Language</span>
+            <select id="languageSelect"></select>
+          </label>
+          <label class="select-field">
+            <span>Frontend</span>
+            <select id="frontendSelect"></select>
+          </label>
+          <label class="select-field">
+            <span>Backend</span>
+            <select id="backendSelect"></select>
+          </label>
+          <label class="select-field">
+            <span>Database</span>
+            <select id="databaseSelect"></select>
+          </label>
+          <label class="select-field">
+            <span>AI / Tools</span>
+            <select id="aiToolsSelect"></select>
+          </label>
+          <label class="select-field">
+            <span>Deployment</span>
+            <select id="deploymentSelect"></select>
+          </label>
+        </div>
+      </details>
+
       <div class="action-row">
-        <button id="suggestButton" class="primary-button" type="button">Generate Project</button>
-        <button id="askQuestionsButton" class="secondary-button" type="button">Ask Agent Questions</button>
+        <button id="askQuestionsButton" class="secondary-button" type="button">Start Agent Questions</button>
+        <button id="skipSuggestButton" class="ghost-button" type="button">Suggest Tech Stack By Agent</button>
+        <button id="suggestButton" class="primary-button" type="button">Generate After Questions</button>
         <button id="regenerateButton" class="secondary-button" type="button" disabled>Regenerate With Selected Stack</button>
         <button id="confirmButton" class="success-button" type="button" disabled>Confirm And Create ZIP</button>
         <button id="clearButton" class="ghost-button" type="button" disabled>Clear Preview</button>
@@ -88,7 +119,7 @@
           <p class="section-label">Agent Conversation</p>
           <h2>Project Agent</h2>
         </div>
-        <p class="section-note">The agent is guiding the architecture before generation.</p>
+        <p class="section-note">The agent asks focused questions before generation.</p>
       </div>
 
       <div class="agent-bubble agent-intro">
@@ -119,7 +150,7 @@
           </div>
           <div class="question-actions">
             <button id="continueButton" class="secondary-button" type="button" disabled>Next</button>
-            <button id="skipQuestionsButton" class="ghost-button" type="button" disabled>Skip All &amp; Use Suggested Defaults</button>
+            <button id="skipQuestionsButton" class="ghost-button" type="button" disabled>Let Agent Suggest All Answers</button>
           </div>
         </div>
         <div id="questionCards" class="question-cards"></div>
@@ -132,37 +163,6 @@
         <pre id="finalRequirementsText" class="final-requirements-block"></pre>
         <button id="generateProjectButton" class="primary-button" type="button" disabled>Generate Project</button>
       </article>
-
-      <details id="advancedStackSection" class="advanced-stack" hidden>
-        <summary>Advanced Stack Settings</summary>
-        <p class="section-note">You can still override the stack manually before generation or regeneration.</p>
-        <div class="stack-grid">
-          <label class="select-field">
-            <span>Language</span>
-            <select id="languageSelect"></select>
-          </label>
-          <label class="select-field">
-            <span>Frontend</span>
-            <select id="frontendSelect"></select>
-          </label>
-          <label class="select-field">
-            <span>Backend</span>
-            <select id="backendSelect"></select>
-          </label>
-          <label class="select-field">
-            <span>Database</span>
-            <select id="databaseSelect"></select>
-          </label>
-          <label class="select-field">
-            <span>AI / Tools</span>
-            <select id="aiToolsSelect"></select>
-          </label>
-          <label class="select-field">
-            <span>Deployment</span>
-            <select id="deploymentSelect"></select>
-          </label>
-        </div>
-      </details>
     </section>
 
     <section id="previewSection" class="panel preview-panel" hidden>

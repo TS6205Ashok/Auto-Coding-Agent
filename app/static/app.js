@@ -9,6 +9,7 @@ const STACK_OPTIONS = {
 
 const ideaInput = document.getElementById("ideaInput");
 const suggestButton = document.getElementById("suggestButton");
+const skipSuggestButton = document.getElementById("skipSuggestButton");
 const askQuestionsButton = document.getElementById("askQuestionsButton");
 const continueButton = document.getElementById("continueButton");
 const skipQuestionsButton = document.getElementById("skipQuestionsButton");
@@ -73,6 +74,11 @@ let agentAnswers = {};
 let finalRequirements = "";
 let currentPreview = null;
 let selectedStack = getDefaultStackState();
+let suggestedStack = getDefaultStackState();
+let currentStackSelection = createCurrentStackSelection(getDefaultStackState(), {
+  source: "initial_default",
+});
+let isApplyingStackToControls = false;
 let currentQuestionIndex = 0;
 let currentQuestionDraft = "";
 let showingSuggestion = false;
@@ -93,7 +99,8 @@ initializeStackSelectors();
 resetAgentActivity();
 refreshUiState();
 
-suggestButton.addEventListener("click", handleGenerateImmediately);
+suggestButton.addEventListener("click", handleGenerateAfterQuestions);
+skipSuggestButton.addEventListener("click", handleSkipToAgentSuggestion);
 askQuestionsButton.addEventListener("click", handleAskQuestions);
 continueButton.addEventListener("click", handleContinueAgent);
 skipQuestionsButton.addEventListener("click", handleSkipQuestions);
@@ -102,8 +109,8 @@ regenerateButton.addEventListener("click", handleRegenerate);
 confirmButton.addEventListener("click", handleConfirmZip);
 clearButton.addEventListener("click", resetAll);
 
-Object.values(stackSelects).forEach((select) => {
-  select.addEventListener("change", handleStackChange);
+Object.entries(stackSelects).forEach(([key, select]) => {
+  select.addEventListener("change", () => handleStackChange(key));
 });
 
 function initializeStackSelectors() {
@@ -163,16 +170,94 @@ function collectSelectedStack() {
   };
 }
 
-function applySelectedStackToControls(stack) {
+function createCurrentStackSelection(stack, metadata = {}) {
   const safeStack = stack || getDefaultStackState();
+  return {
+    language: safeStack.language || "Auto",
+    frontend: safeStack.frontend || "Auto",
+    backend: safeStack.backend || "Auto",
+    database: safeStack.database || "Auto",
+    aiTools: safeStack.aiTools || "Auto",
+    deployment: safeStack.deployment || "Auto",
+    source: metadata.source || safeStack.source || "advanced_settings_stack",
+    runtimeTools: metadata.runtimeTools || safeStack.runtimeTools || [],
+    packageManager: metadata.packageManager || safeStack.packageManager || "",
+    lastModifiedField: metadata.lastModifiedField || safeStack.lastModifiedField || "",
+    lastModifiedAt: metadata.lastModifiedAt || safeStack.lastModifiedAt || null,
+    isUserConfirmedStack: Boolean(metadata.isUserConfirmedStack ?? safeStack.isUserConfirmedStack ?? false),
+    isDirty: Boolean(metadata.isDirty ?? safeStack.isDirty ?? false),
+  };
+}
+
+function getStackFields(stack) {
+  const source = stack || getDefaultStackState();
+  return {
+    language: source.language || "Auto",
+    frontend: source.frontend || "Auto",
+    backend: source.backend || "Auto",
+    database: source.database || "Auto",
+    aiTools: source.aiTools || "Auto",
+    deployment: source.deployment || "Auto",
+  };
+}
+
+function getCurrentStackSelection() {
+  const latestStack = collectSelectedStack();
+  currentStackSelection = createCurrentStackSelection(latestStack, {
+    ...currentStackSelection,
+    source: currentStackSelection.source || "advanced_settings_stack",
+  });
+  selectedStack = getStackFields(currentStackSelection);
+  return currentStackSelection;
+}
+
+function setCurrentStackSelectionFromStack(stack, metadata = {}) {
+  currentStackSelection = createCurrentStackSelection(stack, metadata);
+  selectedStack = getStackFields(currentStackSelection);
+}
+
+function applySelectedStackToControls(stack, metadata = {}) {
+  const safeStack = stack || getDefaultStackState();
+  isApplyingStackToControls = true;
   Object.entries(stackSelects).forEach(([key, select]) => {
     select.value = safeStack[key] || "Auto";
   });
-  selectedStack = collectSelectedStack();
+  isApplyingStackToControls = false;
+  setCurrentStackSelectionFromStack(collectSelectedStack(), {
+    source: metadata.source || safeStack.source || currentStackSelection.source || "advanced_settings_stack",
+    runtimeTools: safeStack.runtimeTools || metadata.runtimeTools || [],
+    packageManager: safeStack.packageManager || metadata.packageManager || "",
+    lastModifiedField: metadata.lastModifiedField || safeStack.lastModifiedField || currentStackSelection.lastModifiedField || "",
+    lastModifiedAt: metadata.lastModifiedAt || safeStack.lastModifiedAt || currentStackSelection.lastModifiedAt || null,
+    isUserConfirmedStack: Boolean(metadata.isUserConfirmedStack ?? safeStack.isUserConfirmedStack ?? currentStackSelection.isUserConfirmedStack ?? false),
+    isDirty: Boolean(metadata.isDirty ?? safeStack.isDirty ?? currentStackSelection.isDirty ?? false),
+  });
 }
 
-function handleStackChange() {
-  selectedStack = collectSelectedStack();
+function mergeManualStackWithSuggestion(manualStack, suggestedStack) {
+  const defaults = getDefaultStackState();
+  const suggestion = suggestedStack || defaults;
+  const manual = manualStack || defaults;
+  return Object.fromEntries(
+    Object.keys(defaults).map((key) => {
+      const manualValue = manual[key] || "Auto";
+      return [key, manualValue !== "Auto" ? manualValue : suggestion[key] || "Auto"];
+    }),
+  );
+}
+
+function handleStackChange(editedField) {
+  if (isApplyingStackToControls) {
+    return;
+  }
+  setCurrentStackSelectionFromStack(collectSelectedStack(), {
+    ...currentStackSelection,
+    source: "user_modified_suggestion",
+    isUserConfirmedStack: true,
+    isDirty: true,
+    lastModifiedField: editedField,
+    lastModifiedAt: Date.now(),
+  });
   refreshUiState();
 }
 
@@ -229,6 +314,7 @@ function renderAgentActivity() {
 
 function setBusy(isBusy, message = "Working...") {
   suggestButton.disabled = isBusy;
+  skipSuggestButton.disabled = isBusy;
   askQuestionsButton.disabled = isBusy;
   continueButton.disabled = isBusy || !agentAnalysis;
   skipQuestionsButton.disabled = isBusy || !agentAnalysis;
@@ -238,7 +324,7 @@ function setBusy(isBusy, message = "Working...") {
   clearButton.disabled = isBusy && !baseIdea && !currentPreview && !agentAnalysis;
   generationModeSelect.disabled = isBusy;
   Object.values(stackSelects).forEach((select) => {
-    select.disabled = isBusy || (!agentAnalysis && !currentPreview);
+    select.disabled = isBusy;
   });
   if (isBusy) {
     setStatus(message, "loading");
@@ -252,8 +338,9 @@ function refreshUiState() {
   regenerateButton.disabled = !currentPreview;
   confirmButton.disabled = !currentPreview;
   clearButton.disabled = !baseIdea && !currentPreview && !agentAnalysis;
+  skipSuggestButton.disabled = false;
   Object.values(stackSelects).forEach((select) => {
-    select.disabled = !agentAnalysis && !currentPreview;
+    select.disabled = false;
   });
 
   const questions = getQuestionList();
@@ -266,6 +353,14 @@ function refreshUiState() {
   } else {
     continueButton.textContent = "Next";
   }
+}
+
+async function handleGenerateAfterQuestions() {
+  if (finalRequirements) {
+    await handleGenerateProject();
+    return;
+  }
+  await handleAskQuestions();
 }
 
 async function handleGenerateImmediately() {
@@ -286,7 +381,7 @@ async function handleGenerateImmediately() {
   previewSection.hidden = true;
   downloadSection.hidden = true;
   finalizeCard.hidden = true;
-  advancedStackSection.hidden = false;
+  advancedStackSection.hidden = true;
   setAgentActivity({
     understood: "done",
     analyzed: "done",
@@ -298,15 +393,18 @@ async function handleGenerateImmediately() {
   setBusy(true, "Generating runnable starter project...");
 
   try {
-    selectedStack = collectSelectedStack();
+    const stackSelection = getCurrentStackSelection();
     const payload = await requestPreview({
       idea,
-      selectedStack,
+      selectedStack: stackSelection,
       finalRequirements: "",
     });
     currentPreview = payload;
-    selectedStack = payload.selectedStack || selectedStack;
-    applySelectedStackToControls(selectedStack);
+    applySelectedStackToControls(payload.selectedStack || stackSelection, {
+      source: payload.stackSelectionSource || stackSelection.source,
+      isUserConfirmedStack: stackSelection.isUserConfirmedStack,
+      isDirty: stackSelection.isDirty,
+    });
     renderPreview(payload);
     setAgentActivity({
       generated: "done",
@@ -315,7 +413,7 @@ async function handleGenerateImmediately() {
       repaired: "done",
       ready: "done",
     });
-    setStatus("Project preview is ready. You can regenerate, ask questions, or create the ZIP.", "success");
+    setStatus("Project preview is ready. You can regenerate with a different stack or create the ZIP.", "success");
   } catch (error) {
     currentPreview = null;
     previewSection.hidden = true;
@@ -335,7 +433,7 @@ async function handleGenerateImmediately() {
 async function handleAskQuestions() {
   const idea = ideaInput.value.trim();
   if (!idea) {
-    setStatus("Please enter a project idea before starting the agent.", "error");
+    setStatus("Please enter a project idea before starting the agent questions.", "error");
     return;
   }
 
@@ -351,16 +449,22 @@ async function handleAskQuestions() {
   setAgentActivity({
     understood: "current",
   });
-  setBusy(true, "Analyzing your idea...");
+  setBusy(true, "Analyzing your idea and preparing questions...");
 
   try {
+    const manualStack = getStackFields(getCurrentStackSelection());
     const payload = await requestAgentAnalysis(idea);
     agentAnalysis = payload;
-    selectedStack = payload.suggestedStack || getDefaultStackState();
-    applySelectedStackToControls(selectedStack);
+    suggestedStack = payload.suggestedStack || getDefaultStackState();
+    const mergedStack = mergeManualStackWithSuggestion(manualStack, suggestedStack);
+    applySelectedStackToControls(mergedStack, {
+      source: "original_suggested_stack",
+      isUserConfirmedStack: false,
+      isDirty: false,
+    });
     renderAgentAnalysis(payload);
     agentSection.hidden = false;
-    advancedStackSection.hidden = false;
+    advancedStackSection.hidden = true;
     setAgentActivity({
       understood: "done",
       analyzed: "done",
@@ -368,12 +472,62 @@ async function handleAskQuestions() {
       stack: "done",
       planned: "done",
     });
-    setStatus("The agent reviewed your idea. Answer the questions one by one or skip and use the suggested defaults.", "success");
+    setStatus("The agent reviewed your idea. Answer the questions one by one, or skip and use suggested defaults.", "success");
   } catch (error) {
     agentAnalysis = null;
     agentSection.hidden = true;
+    setStatus(error.message || "Could not start the agent questions.", "error");
+  } finally {
+    clearBusyState();
+  }
+}
+
+async function handleSkipToAgentSuggestion() {
+  const idea = ideaInput.value.trim();
+  if (!idea) {
+    setStatus("Please enter a project idea before letting the agent suggest a stack.", "error");
+    return;
+  }
+
+  baseIdea = idea;
+  currentPreview = null;
+  finalRequirements = "";
+  agentAnswers = {};
+  resetQuestionFlow();
+  resetAgentActivity();
+  previewSection.hidden = true;
+  downloadSection.hidden = true;
+  finalizeCard.hidden = true;
+  setAgentActivity({
+    understood: "current",
+  });
+  setBusy(true, "Agent is suggesting a stack and preparing questions...");
+
+  try {
+    const payload = await requestAgentAnalysis(idea);
+    agentAnalysis = payload;
+    suggestedStack = payload.suggestedStack || getDefaultStackState();
+    applySelectedStackToControls(suggestedStack, {
+      source: "original_suggested_stack",
+      isUserConfirmedStack: false,
+      isDirty: false,
+    });
+    renderAgentAnalysis(payload);
+    agentSection.hidden = false;
     advancedStackSection.hidden = true;
-    setStatus(error.message || "Could not start the agent.", "error");
+    setAgentActivity({
+      understood: "done",
+      analyzed: "done",
+      migrated: "done",
+      stack: "done",
+      planned: "done",
+    });
+    finalRequirements = "";
+    setStatus("Agent suggested a tech stack. Answer the questions one by one before generation.", "success");
+  } catch (error) {
+    agentAnalysis = null;
+    agentSection.hidden = true;
+    setStatus(error.message || "Could not prepare questions from the agent-suggested stack.", "error");
   } finally {
     clearBusyState();
   }
@@ -410,17 +564,15 @@ async function handleSkipQuestions() {
   }
 
   downloadSection.hidden = true;
-  setBusy(true, "Generating project with suggested defaults...");
+  setBusy(true, "Letting the agent answer the remaining questions...");
 
   try {
     await finalizeAgentConversation({ fillDefaults: true });
-    await generatePreviewFromCurrentState(
-      "Preview ready. Review the generated project, regenerate if needed, then confirm to create the ZIP.",
-    );
+    setStatus("Agent filled the answers. Generate the project when you are ready.", "success");
   } catch (error) {
     currentPreview = null;
     previewSection.hidden = true;
-    setStatus(error.message || "Could not generate the project from the suggested defaults.", "error");
+    setStatus(error.message || "Could not finalize the agent-suggested answers.", "error");
   } finally {
     clearBusyState();
   }
@@ -482,6 +634,15 @@ async function handleConfirmZip() {
   });
 
   try {
+    const stackSelection = getCurrentStackSelection();
+    if (stackSelection.isDirty) {
+      currentPreview = {
+        ...currentPreview,
+        selectedStack: getStackFields(stackSelection),
+        stackSelectionSource: stackSelection.source,
+        isUserConfirmedStack: stackSelection.isUserConfirmedStack,
+      };
+    }
     const response = await fetch("/api/zip", {
       method: "POST",
       headers: {
@@ -547,6 +708,7 @@ async function requestAgentFinalize(body) {
 }
 
 async function requestPreview(body) {
+  const stackSelection = body.selectedStack || getCurrentStackSelection();
   const response = await fetch("/api/suggest", {
     method: "POST",
     headers: {
@@ -555,6 +717,9 @@ async function requestPreview(body) {
     body: JSON.stringify({
       generationMode: generationModeSelect.value || "fast",
       ...body,
+      selectedStack: stackSelection,
+      stackSelectionSource: stackSelection.source || "",
+      isUserConfirmedStack: Boolean(stackSelection.isUserConfirmedStack || stackSelection.isDirty),
     }),
   });
 
@@ -612,7 +777,7 @@ function renderQuestionFlow() {
 
   const reason = document.createElement("p");
   reason.className = "question-reason";
-  reason.textContent = "Type your preference first. If you leave it blank, the agent will suggest a default and explain why.";
+  reason.textContent = "Type your preference, or use Let Agent Suggest to see the recommended answer and reason.";
 
   const inputLabel = document.createElement("label");
   inputLabel.className = "field-label";
@@ -629,7 +794,20 @@ function renderQuestionFlow() {
     setQuestionDraft(event.target.value);
   });
 
-  card.append(position, title, reason, inputLabel, input);
+  const quickActions = document.createElement("div");
+  quickActions.className = "question-actions inline-question-actions";
+
+  const suggestAnswerButton = document.createElement("button");
+  suggestAnswerButton.type = "button";
+  suggestAnswerButton.className = "ghost-button";
+  suggestAnswerButton.textContent = "Let Agent Suggest";
+  suggestAnswerButton.addEventListener("click", () => {
+    showingSuggestion = true;
+    renderQuestionFlow();
+  });
+
+  quickActions.appendChild(suggestAnswerButton);
+  card.append(position, title, reason, inputLabel, input, quickActions);
 
   if (Array.isArray(question.options) && question.options.length) {
     const optionsHint = document.createElement("p");
@@ -765,26 +943,37 @@ function renderFinalization(finalized) {
 
 function clearBusyState() {
   suggestButton.disabled = false;
+  skipSuggestButton.disabled = false;
   askQuestionsButton.disabled = false;
   generationModeSelect.disabled = false;
+  Object.values(stackSelects).forEach((select) => {
+    select.disabled = false;
+  });
   refreshUiState();
 }
 
 async function finalizeAgentConversation({ fillDefaults }) {
+  const stackSelection = getCurrentStackSelection();
   const payload = await requestAgentFinalize({
     idea: baseIdea,
     answers: buildAnswersPayload(fillDefaults),
-    suggestedStack: collectSelectedStack(),
+    suggestedStack: getStackFields(stackSelection),
   });
   finalRequirements = payload.finalRequirements || "";
-  selectedStack = payload.selectedStack || selectedStack;
-  applySelectedStackToControls(selectedStack);
+  const finalizedStack = currentStackSelection.isDirty ? stackSelection : payload.selectedStack || stackSelection;
+  applySelectedStackToControls(finalizedStack, {
+    source: currentStackSelection.isDirty ? currentStackSelection.source : "confirmed_question_stack",
+    isUserConfirmedStack: currentStackSelection.isDirty,
+    isDirty: currentStackSelection.isDirty,
+    lastModifiedField: currentStackSelection.lastModifiedField,
+    lastModifiedAt: currentStackSelection.lastModifiedAt,
+  });
   renderFinalization(payload);
   return payload;
 }
 
 async function generatePreviewFromCurrentState(successMessage) {
-  selectedStack = collectSelectedStack();
+  const stackSelection = getCurrentStackSelection();
   setAgentActivity({
     understood: "done",
     analyzed: "done",
@@ -799,13 +988,18 @@ async function generatePreviewFromCurrentState(successMessage) {
   });
   const payload = await requestPreview({
     idea: baseIdea,
-    selectedStack,
+    selectedStack: stackSelection,
     finalRequirements,
   });
   currentPreview = payload;
-  selectedStack = payload.selectedStack || selectedStack;
   renderPreview(payload);
-  applySelectedStackToControls(selectedStack);
+  applySelectedStackToControls(payload.selectedStack || stackSelection, {
+    source: payload.stackSelectionSource || stackSelection.source,
+    isUserConfirmedStack: stackSelection.isUserConfirmedStack,
+    isDirty: stackSelection.isDirty,
+    lastModifiedField: stackSelection.lastModifiedField,
+    lastModifiedAt: stackSelection.lastModifiedAt,
+  });
   setAgentActivity({
     generated: "done",
     tools: "done",
@@ -824,6 +1018,10 @@ function resetAll() {
   finalRequirements = "";
   currentPreview = null;
   selectedStack = getDefaultStackState();
+  suggestedStack = getDefaultStackState();
+  currentStackSelection = createCurrentStackSelection(getDefaultStackState(), {
+    source: "initial_default",
+  });
   resetQuestionFlow();
   resetAgentActivity();
 
@@ -832,7 +1030,6 @@ function resetAll() {
   applySelectedStackToControls(getDefaultStackState());
   agentSection.hidden = true;
   advancedStackSection.hidden = true;
-  advancedStackSection.open = false;
   previewSection.hidden = true;
   downloadSection.hidden = true;
   finalizeCard.hidden = true;

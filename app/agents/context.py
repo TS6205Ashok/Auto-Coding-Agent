@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from app.services.architecture_registry import FinalArchitectureDecision
 
 
 @dataclass(slots=True)
@@ -9,6 +12,10 @@ class AgentWorkflowContext:
     prompt: str
     generation_mode: str = "fast"
     requested_stack: dict[str, str] = field(default_factory=dict)
+    stack_selection_source: str = ""
+    is_user_confirmed_stack: bool = False
+    last_modified_field: str = ""
+    last_modified_at: float | None = None
     final_requirements: str = ""
     generation_context: str = ""
     detected_user_choices: list[str] = field(default_factory=list)
@@ -55,3 +62,4 @@ class AgentWorkflowContext:
     fallback_used: bool = False
     fallback_reason: str = ""
     ai_raw_plan: dict[str, Any] = field(default_factory=dict)
+    final_architecture: FinalArchitectureDecision | None = None

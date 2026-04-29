@@ -330,10 +330,277 @@ class AgentControllerTests(unittest.TestCase):
         self.assertIn("README.md", file_map)
         self.assertIn("FULL_RUNTIME_INSTRUCTIONS.md", file_map)
         self.assertIn("IntelliJ IDEA", file_map["README.md"])
-        self.assertIn("pom.xml", file_map)
+        self.assertIn("backend/pom.xml", file_map)
         self.assertTrue(any("SpringApplication.run" in content for content in file_map.values()))
         self.assertIn("IntelliJ IDEA", file_map["FULL_RUNTIME_INSTRUCTIONS.md"])
         self.assertIn("Maven", file_map["FULL_RUNTIME_INSTRUCTIONS.md"])
+
+    def test_java_selected_generates_spring_boot_without_python_artifacts(self) -> None:
+        with patch.dict(os.environ, {"OLLAMA_BASE_URL": ""}, clear=False):
+            preview = asyncio.run(
+                agent_controller.generate_files(
+                    "create todo app",
+                    selected_stack={
+                        "language": "Java",
+                        "frontend": "Auto",
+                        "backend": "Auto",
+                        "database": "Auto",
+                        "aiTools": "None",
+                        "deployment": "Auto",
+                    },
+                    generation_mode="fast",
+                )
+            )
+
+        file_map = {item["path"]: item["content"] for item in preview.get("files", [])}
+        self.assertEqual(preview["selectedStack"]["language"], "Java")
+        self.assertEqual(preview["selectedStack"]["backend"], "Spring Boot")
+        self.assertIn("backend/pom.xml", file_map)
+        self.assertIn("backend/src/main/java/com/example/app/Application.java", file_map)
+        self.assertIn("backend/src/main/java/com/example/app/controller/HealthController.java", file_map)
+        self.assertEqual(preview["recommendedIde"], "IntelliJ IDEA")
+        self.assertFalse(any(path.endswith("requirements.txt") for path in file_map))
+        self.assertFalse(any(path.endswith(".py") for path in file_map))
+        self.assertNotIn("FastAPI", "\n".join(file_map.values()))
+        self.assertNotIn("Flask", "\n".join(file_map.values()))
+
+    def test_flask_selected_forces_python_flask_without_java_artifacts(self) -> None:
+        with patch.dict(os.environ, {"OLLAMA_BASE_URL": ""}, clear=False):
+            preview = asyncio.run(
+                agent_controller.generate_files(
+                    "create todo app",
+                    selected_stack={
+                        "language": "Auto",
+                        "frontend": "Auto",
+                        "backend": "Flask",
+                        "database": "Auto",
+                        "aiTools": "None",
+                        "deployment": "Auto",
+                    },
+                    generation_mode="fast",
+                )
+            )
+
+        file_map = {item["path"]: item["content"] for item in preview.get("files", [])}
+        self.assertEqual(preview["selectedStack"]["language"], "Python")
+        self.assertEqual(preview["selectedStack"]["backend"], "Flask")
+        self.assertIn("backend/requirements.txt", file_map)
+        self.assertIn("flask", file_map["backend/requirements.txt"].lower())
+        self.assertIn("from flask import Flask", file_map["backend/app/main.py"])
+        self.assertFalse(any(path.endswith("pom.xml") for path in file_map))
+        self.assertFalse(any("src/main/java" in path for path in file_map))
+        self.assertNotIn("FastAPI", "\n".join(file_map.values()))
+
+    def test_fastapi_selected_forces_python_fastapi_without_java_artifacts(self) -> None:
+        with patch.dict(os.environ, {"OLLAMA_BASE_URL": ""}, clear=False):
+            preview = asyncio.run(
+                agent_controller.generate_files(
+                    "create API app",
+                    selected_stack={
+                        "language": "Auto",
+                        "frontend": "Auto",
+                        "backend": "FastAPI",
+                        "database": "Auto",
+                        "aiTools": "None",
+                        "deployment": "Auto",
+                    },
+                    generation_mode="fast",
+                )
+            )
+
+        file_map = {item["path"]: item["content"] for item in preview.get("files", [])}
+        self.assertEqual(preview["selectedStack"]["language"], "Python")
+        self.assertEqual(preview["selectedStack"]["backend"], "FastAPI")
+        self.assertIn("fastapi", file_map["backend/requirements.txt"].lower())
+        self.assertIn("uvicorn", file_map["backend/requirements.txt"].lower())
+        self.assertFalse(any(path.endswith("pom.xml") for path in file_map))
+        self.assertFalse(any("src/main/java" in path for path in file_map))
+
+    def test_react_only_selected_generates_frontend_without_backend(self) -> None:
+        with patch.dict(os.environ, {"OLLAMA_BASE_URL": ""}, clear=False):
+            preview = asyncio.run(
+                agent_controller.generate_files(
+                    "create landing page",
+                    selected_stack={
+                        "language": "Auto",
+                        "frontend": "React",
+                        "backend": "None",
+                        "database": "None",
+                        "aiTools": "None",
+                        "deployment": "Auto",
+                    },
+                    generation_mode="fast",
+                )
+            )
+
+        file_paths = {item["path"] for item in preview.get("files", [])}
+        self.assertEqual(preview["selectedStack"]["frontend"], "React")
+        self.assertEqual(preview["selectedStack"]["backend"], "None")
+        self.assertIn("frontend/package.json", file_paths)
+        self.assertIn("frontend/src/main.jsx", file_paths)
+        self.assertFalse(any(path.startswith("backend/") for path in file_paths))
+        self.assertNotIn("requirements.txt", file_paths)
+        self.assertNotIn("pom.xml", file_paths)
+
+    def test_user_modified_stack_overrides_suggestion_to_java_mysql(self) -> None:
+        modified_stack = {
+            "language": "Java",
+            "frontend": "React",
+            "backend": "Spring Boot",
+            "database": "MySQL",
+            "aiTools": "None",
+            "deployment": "Render",
+            "source": "user_modified_suggestion",
+            "lastModifiedField": "database",
+            "lastModifiedAt": 1710000000000,
+            "isUserConfirmedStack": True,
+            "isDirty": True,
+        }
+        with patch.dict(os.environ, {"OLLAMA_BASE_URL": ""}, clear=False):
+            preview = asyncio.run(
+                agent_controller.generate_files(
+                    "create todo app",
+                    selected_stack=modified_stack,
+                    stack_selection_source="user_modified_suggestion",
+                    is_user_confirmed_stack=True,
+                    generation_mode="fast",
+                )
+            )
+
+        file_map = {item["path"]: item["content"] for item in preview.get("files", [])}
+        self.assertEqual(preview["selectedStack"]["language"], "Java")
+        self.assertEqual(preview["selectedStack"]["backend"], "Spring Boot")
+        self.assertEqual(preview["selectedStack"]["database"], "MySQL")
+        self.assertEqual(preview["finalArchitecture"]["stack_selection_source"], "user_modified_suggestion")
+        self.assertIn("backend/pom.xml", file_map)
+        self.assertFalse(any(path.endswith("requirements.txt") for path in file_map))
+
+    def test_user_modified_database_only_preserves_fastapi_stack(self) -> None:
+        modified_stack = {
+            "language": "Python",
+            "frontend": "React",
+            "backend": "FastAPI",
+            "database": "MySQL",
+            "aiTools": "None",
+            "deployment": "Render",
+            "source": "user_modified_suggestion",
+            "lastModifiedField": "database",
+            "lastModifiedAt": 1710000000000,
+            "isUserConfirmedStack": True,
+            "isDirty": True,
+        }
+        with patch.dict(os.environ, {"OLLAMA_BASE_URL": ""}, clear=False):
+            preview = asyncio.run(
+                agent_controller.generate_files(
+                    "create todo app",
+                    selected_stack=modified_stack,
+                    stack_selection_source="user_modified_suggestion",
+                    is_user_confirmed_stack=True,
+                    generation_mode="fast",
+                )
+            )
+
+        file_map = {item["path"]: item["content"] for item in preview.get("files", [])}
+        self.assertEqual(preview["selectedStack"]["frontend"], "React")
+        self.assertEqual(preview["selectedStack"]["backend"], "FastAPI")
+        self.assertEqual(preview["selectedStack"]["database"], "MySQL")
+        self.assertIn("backend/requirements.txt", file_map)
+        self.assertIn("frontend/src/App.jsx", file_map)
+
+    def test_user_modified_backend_to_flask_preserves_last_backend_edit(self) -> None:
+        modified_stack = {
+            "language": "Java",
+            "frontend": "React",
+            "backend": "Flask",
+            "database": "SQLite",
+            "aiTools": "None",
+            "deployment": "Render",
+            "source": "user_modified_suggestion",
+            "lastModifiedField": "backend",
+            "lastModifiedAt": 1710000000000,
+            "isUserConfirmedStack": True,
+            "isDirty": True,
+        }
+        with patch.dict(os.environ, {"OLLAMA_BASE_URL": ""}, clear=False):
+            preview = asyncio.run(
+                agent_controller.generate_files(
+                    "create todo app",
+                    selected_stack=modified_stack,
+                    stack_selection_source="user_modified_suggestion",
+                    is_user_confirmed_stack=True,
+                    generation_mode="fast",
+                )
+            )
+
+        file_map = {item["path"]: item["content"] for item in preview.get("files", [])}
+        self.assertEqual(preview["selectedStack"]["language"], "Python")
+        self.assertEqual(preview["selectedStack"]["backend"], "Flask")
+        self.assertIn("from flask import Flask", file_map["backend/app/main.py"])
+        self.assertFalse(any("src/main/java" in path for path in file_map))
+
+    def test_user_modified_language_to_java_preserves_last_language_edit(self) -> None:
+        modified_stack = {
+            "language": "Java",
+            "frontend": "React",
+            "backend": "FastAPI",
+            "database": "SQLite",
+            "aiTools": "None",
+            "deployment": "Render",
+            "source": "user_modified_suggestion",
+            "lastModifiedField": "language",
+            "lastModifiedAt": 1710000000000,
+            "isUserConfirmedStack": True,
+            "isDirty": True,
+        }
+        with patch.dict(os.environ, {"OLLAMA_BASE_URL": ""}, clear=False):
+            preview = asyncio.run(
+                agent_controller.generate_files(
+                    "create todo app",
+                    selected_stack=modified_stack,
+                    stack_selection_source="user_modified_suggestion",
+                    is_user_confirmed_stack=True,
+                    generation_mode="fast",
+                )
+            )
+
+        self.assertEqual(preview["selectedStack"]["language"], "Java")
+        self.assertEqual(preview["selectedStack"]["backend"], "Spring Boot")
+        self.assertIn(
+            "backend/src/main/java/com/example/app/Application.java",
+            {item["path"] for item in preview.get("files", [])},
+        )
+
+    def test_confirmed_backend_edit_overrides_sudoku_static_default(self) -> None:
+        modified_stack = {
+            "language": "Auto",
+            "frontend": "Auto",
+            "backend": "Spring Boot",
+            "database": "MySQL",
+            "aiTools": "None",
+            "deployment": "Render",
+            "source": "user_modified_suggestion",
+            "lastModifiedField": "backend",
+            "lastModifiedAt": 1710000000000,
+            "isUserConfirmedStack": True,
+            "isDirty": True,
+        }
+        with patch.dict(os.environ, {"OLLAMA_BASE_URL": ""}, clear=False):
+            preview = asyncio.run(
+                agent_controller.generate_files(
+                    "create sudoku web",
+                    selected_stack=modified_stack,
+                    stack_selection_source="user_modified_suggestion",
+                    is_user_confirmed_stack=True,
+                    generation_mode="fast",
+                )
+            )
+
+        file_paths = {item["path"] for item in preview.get("files", [])}
+        self.assertEqual(preview["selectedStack"]["language"], "Java")
+        self.assertEqual(preview["selectedStack"]["backend"], "Spring Boot")
+        self.assertEqual(preview["selectedStack"]["database"], "MySQL")
+        self.assertIn("backend/pom.xml", file_paths)
+        self.assertNotIn("script.js", file_paths)
 
     def test_suggest_detects_pasted_fastapi_code_and_keeps_python_stack(self) -> None:
         prompt = (
@@ -516,6 +783,151 @@ class AgentControllerTests(unittest.TestCase):
             "frontend/run.bat",
         ]:
             self.assertTrue(any(name.endswith("/" + required_path) for name in names), required_path)
+
+    def test_zip_file_set_exactly_matches_validated_preview_file_set(self) -> None:
+        with patch.dict(os.environ, {"OLLAMA_BASE_URL": ""}, clear=False):
+            preview_response = self.client.post(
+                "/api/suggest",
+                json={"idea": "create sudoku web", "generationMode": "fast"},
+            )
+
+        self.assertEqual(preview_response.status_code, 200)
+        preview = preview_response.json()
+        zip_response = self.client.post("/api/zip", json={"preview": preview})
+        self.assertEqual(zip_response.status_code, 200)
+
+        zip_payload = zip_response.json()
+        zip_path = Path("generated") / zip_payload["filename"]
+        with ZipFile(zip_path) as archive:
+            archive_paths = {
+                name.split("/", 1)[1]
+                for name in archive.namelist()
+                if "/" in name and not name.endswith("/")
+            }
+
+        preview_paths = {item["path"] for item in preview.get("files", [])}
+        self.assertEqual(archive_paths, preview_paths)
+
+    def test_regenerate_request_uses_modified_stack_not_original_preview_stack(self) -> None:
+        original_stack = {
+            "language": "Python",
+            "frontend": "React",
+            "backend": "FastAPI",
+            "database": "SQLite",
+            "aiTools": "None",
+            "deployment": "Render",
+        }
+        modified_stack = {
+            **original_stack,
+            "language": "Java",
+            "backend": "Spring Boot",
+            "database": "MySQL",
+            "source": "user_modified_suggestion",
+            "lastModifiedField": "backend",
+            "lastModifiedAt": 1710000000000,
+            "isUserConfirmedStack": True,
+            "isDirty": True,
+        }
+        with patch.dict(os.environ, {"OLLAMA_BASE_URL": ""}, clear=False):
+            preview = asyncio.run(
+                agent_controller.generate_files(
+                    "create todo app",
+                    selected_stack=modified_stack,
+                    stack_selection_source="user_modified_suggestion",
+                    is_user_confirmed_stack=True,
+                    generation_mode="fast",
+                )
+            )
+
+        file_paths = {item["path"] for item in preview.get("files", [])}
+        self.assertEqual(preview["selectedStack"]["language"], "Java")
+        self.assertEqual(preview["selectedStack"]["backend"], "Spring Boot")
+        self.assertEqual(preview["selectedStack"]["database"], "MySQL")
+        self.assertIn("backend/pom.xml", file_paths)
+        self.assertNotIn("backend/requirements.txt", file_paths)
+
+    def test_zip_after_stack_edit_matches_modified_java_output(self) -> None:
+        with patch.dict(os.environ, {"OLLAMA_BASE_URL": ""}, clear=False):
+            preview_response = self.client.post(
+                "/api/suggest",
+                json={
+                    "idea": "create todo app",
+                    "generationMode": "fast",
+                    "selectedStack": {
+                        "language": "Java",
+                        "frontend": "React",
+                        "backend": "Spring Boot",
+                        "database": "MySQL",
+                        "aiTools": "None",
+                        "deployment": "Render",
+                        "source": "user_modified_suggestion",
+                        "lastModifiedField": "backend",
+                        "lastModifiedAt": 1710000000000,
+                        "isUserConfirmedStack": True,
+                        "isDirty": True,
+                    },
+                    "stackSelectionSource": "user_modified_suggestion",
+                    "isUserConfirmedStack": True,
+                },
+            )
+
+        self.assertEqual(preview_response.status_code, 200)
+        preview = preview_response.json()
+        zip_response = self.client.post("/api/zip", json={"preview": preview})
+        self.assertEqual(zip_response.status_code, 200)
+
+        zip_payload = zip_response.json()
+        zip_path = Path("generated") / zip_payload["filename"]
+        with ZipFile(zip_path) as archive:
+            names = archive.namelist()
+
+        self.assertEqual(preview["selectedStack"]["language"], "Java")
+        self.assertEqual(preview["selectedStack"]["backend"], "Spring Boot")
+        self.assertTrue(any(name.endswith("/backend/pom.xml") for name in names))
+        self.assertFalse(any(name.endswith("/backend/requirements.txt") for name in names))
+
+    def test_repair_removes_injected_wrong_stack_files_from_java_preview(self) -> None:
+        preview = {
+            "projectName": "Todo Java",
+            "problemStatement": "create todo app",
+            "summary": "Spring Boot todo app",
+            "selectedStack": {
+                "language": "Java",
+                "frontend": "None",
+                "backend": "Spring Boot",
+                "database": "H2",
+                "aiTools": "None",
+                "deployment": "Render",
+            },
+            "recommendedIde": "IntelliJ IDEA",
+            "alternativeIde": "VS Code",
+            "runtimeTools": ["JDK 17+", "Maven"],
+            "packageManager": "Maven",
+            "files": [
+                {"path": "backend/pom.xml", "content": ""},
+                {"path": "backend/app/main.py", "content": "from fastapi import FastAPI\napp = FastAPI()\n"},
+                {"path": "backend/requirements.txt", "content": "fastapi\nuvicorn\n"},
+            ],
+            "requiredInputs": [],
+            "envVariables": [],
+            "modules": [],
+            "assumptions": [],
+            "architecture": [],
+            "packageRequirements": [],
+            "installCommands": [],
+            "runCommands": [],
+            "detectedUserChoices": [],
+            "chosenStack": [],
+        }
+
+        repaired = agent_controller.validate_project(preview)
+        file_map = {item["path"]: item["content"] for item in repaired.get("files", [])}
+
+        self.assertIn("backend/pom.xml", file_map)
+        self.assertIn("backend/src/main/java/com/example/app/Application.java", file_map)
+        self.assertNotIn("backend/app/main.py", file_map)
+        self.assertNotIn("backend/requirements.txt", file_map)
+        self.assertNotIn("FastAPI", "\n".join(file_map.values()))
 
     def test_zip_revalidates_and_repairs_preview_before_archiving(self) -> None:
         incomplete_preview = {

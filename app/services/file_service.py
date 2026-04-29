@@ -5,6 +5,8 @@ import re
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
 
+from app.services.architecture_registry import forbidden_path, registry_entry_for_selected
+
 
 MAX_GENERATED_FILES = 60
 MAX_FILE_SIZE_BYTES = 250 * 1024
@@ -634,6 +636,10 @@ def required_preview_paths(
     template_family: str = "",
 ) -> set[str]:
     paths = set(_required_runtime_paths(selected_stack, project_kind, template_family=template_family))
+    try:
+        paths.update(registry_entry_for_selected(selected_stack, template_family).required_files)
+    except Exception:
+        pass
     paths.update(SYSTEM_FILENAMES)
     return paths
 
@@ -697,17 +703,48 @@ def collect_preview_validation_findings(
 
     target_backend = str(selected_stack.get("backend") or "")
     target_language = str(selected_stack.get("language") or "")
+    target_frontend = str(selected_stack.get("frontend") or "")
+    try:
+        registry_entry = registry_entry_for_selected(selected_stack, template_family)
+        for path, content in file_map.items():
+            if forbidden_path(path, registry_entry.forbidden_files):
+                findings.append(f"Forbidden file for selected stack: {path}")
+            content_lower = str(content).lower()
+            for term in registry_entry.forbidden_terms:
+                if term.lower() in content_lower:
+                    findings.append(f"Forbidden content for selected stack: {term} in {path}")
+        command_blob = "\n".join(
+            str(item) for item in [
+                *preview.get("installCommands", []),
+                *preview.get("runCommands", []),
+                file_map.get("README.md", ""),
+                file_map.get("SETUP_INSTRUCTIONS.md", ""),
+                file_map.get("FULL_RUNTIME_INSTRUCTIONS.md", ""),
+            ]
+        ).lower()
+        for term in registry_entry.forbidden_terms:
+            if term.lower() in command_blob:
+                findings.append(f"Forbidden command/docs content for selected stack: {term}")
+    except Exception:
+        pass
     if target_language == "Python" or target_backend in {"FastAPI", "Flask"}:
         if any(path.endswith("pom.xml") or path.endswith("Application.java") for path in file_map):
             findings.append("Python targets must not include Spring Boot artifacts.")
         if any(path.endswith("server.js") for path in file_map):
             findings.append("Python targets must not include Node backend artifacts.")
+        if target_backend == "Flask" and any("fastapi" in str(content).lower() or "uvicorn" in str(content).lower() for content in file_map.values()):
+            findings.append("Flask targets must not include FastAPI or Uvicorn artifacts.")
+        if target_backend == "FastAPI" and any("from flask" in str(content).lower() for content in file_map.values()):
+            findings.append("FastAPI targets must not include Flask artifacts.")
     if target_backend == "Spring Boot":
-        if any(path.endswith("server.js") for path in file_map):
-            findings.append("Spring Boot targets must not include Node backend artifacts.")
+        if any(path.endswith("server.js") or path.endswith(".py") or path.endswith("requirements.txt") for path in file_map):
+            findings.append("Spring Boot targets must not include Node or Python backend artifacts.")
     if target_backend == "Express":
         if any(path.endswith("Application.java") or path.endswith("pom.xml") for path in file_map):
             findings.append("Express targets must not include Spring Boot artifacts.")
+    if target_frontend in {"HTML/CSS/JavaScript", "React"} and target_backend in {"None", "", "Auto"}:
+        if any(path.startswith("backend/") for path in file_map):
+            findings.append("Frontend-only targets must not include backend files.")
 
     return findings
 
@@ -851,8 +888,10 @@ def _system_requirements_text(
     requirements = ["- Git and a terminal available inside your IDE."]
     if language == "Python" or backend in {"FastAPI", "Flask"}:
         requirements.append("- Python 3.10+ (3.11+ recommended).")
-    if language == "JavaScript" or frontend == "React" or backend in {"Express", "NestJS"}:
+    if frontend == "React" or backend in {"Express", "NestJS"}:
         requirements.append("- Node.js 18+ (20+ recommended).")
+    elif language == "JavaScript" and frontend == "HTML/CSS/JavaScript" and backend in {"", "None", "Auto"}:
+        requirements.append("- A modern web browser.")
     if language == "Java" or backend == "Spring Boot":
         requirements.append("- Java 17+ and Maven 3.9+.")
     if runtime_tools:
@@ -864,6 +903,13 @@ def _recommended_extensions_text(selected_stack: Mapping[str, Any]) -> str:
     language = str(selected_stack.get("language") or "")
     frontend = str(selected_stack.get("frontend") or "")
     backend = str(selected_stack.get("backend") or "")
+    if frontend == "HTML/CSS/JavaScript" and backend in {"", "None", "Auto"}:
+        return "\n".join(
+            [
+                "- VS Code: Live Server (optional)",
+                "- Browser developer tools",
+            ]
+        )
     if language == "Python" or backend in {"FastAPI", "Flask"}:
         return "\n".join(
             [
@@ -907,7 +953,14 @@ def _setup_steps_text(
     backend = str(selected_stack.get("backend") or "")
     commands = install_commands or []
     lines = []
-    if backend in {"FastAPI", "Flask"} or language == "Python":
+    if frontend == "HTML/CSS/JavaScript" and backend in {"", "None", "Auto"}:
+        lines.extend(
+            [
+                "4. No dependency install is required for this static project.",
+                "   - Open `index.html` directly in a browser.",
+            ]
+        )
+    elif backend in {"FastAPI", "Flask"} or language == "Python":
         lines.extend(
             [
                 "4. Create or activate a Python environment if needed, then install dependencies.",
@@ -921,7 +974,7 @@ def _setup_steps_text(
                 "   - Example: `mvn install`",
             ]
         )
-    elif frontend == "React" or backend in {"Express", "NestJS"} or language == "JavaScript":
+    elif frontend == "React" or backend in {"Express", "NestJS"}:
         lines.extend(
             [
                 "4. Install JavaScript dependencies.",
@@ -969,8 +1022,10 @@ def _run_instructions_text(
         "- Windows: `run.bat`",
         "- Mac/Linux: `chmod +x run.sh` then `./run.sh`",
     ]
-    if backend in {"FastAPI", "Flask"}:
-        lines.append("- Manual backend run: `python app/main.py` or `python backend/app/main.py` depending on the generated layout.")
+    if backend == "FastAPI":
+        lines.append("- Manual backend run: `python -m uvicorn app.main:app --reload` from the backend folder.")
+    elif backend == "Flask":
+        lines.append("- Manual backend run: `python app/main.py` from the backend folder.")
     elif backend == "Spring Boot":
         lines.append("- Manual backend run: `mvn spring-boot:run`")
     elif frontend == "HTML/CSS/JavaScript":
@@ -1057,14 +1112,24 @@ def _valid_full_runtime_instructions(content: str) -> bool:
     required_markers = [
         "project overview",
         "recommended ide",
+        "required extensions / plugins",
+        "system requirements",
         "step-by-step setup instructions",
         "required inputs",
         "how runtime input works",
         "how to run the project",
+        "expected output",
         "troubleshooting",
         "reset instructions",
+        "migration notes",
     ]
-    return all(marker in lowered for marker in required_markers)
+    position = -1
+    for marker in required_markers:
+        next_position = lowered.find(marker)
+        if next_position <= position:
+            return False
+        position = next_position
+    return True
 
 
 def _build_standard_files(
@@ -1080,6 +1145,9 @@ def _build_standard_files(
         return [{"path": path, "content": content} for path, content in files.items()]
 
     files: dict[str, str] = {}
+    if str(selected_stack.get("language") or "") == "C++":
+        files.update(_build_cpp_files(project_name))
+        return [{"path": path, "content": content} for path, content in files.items()]
     if project_kind["isFullStack"]:
         if project_kind["hasFrontend"]:
             files.update(
@@ -1100,17 +1168,17 @@ def _build_standard_files(
             )
         files.update(_build_root_scripts(selected_stack, project_kind))
     elif project_kind["hasBackend"]:
-        files.update(_build_backend_files(selected_stack, project_name, "", required_inputs=required_inputs))
-        files.update(_build_root_scripts(selected_stack, project_kind))
+        files.update(_build_backend_files(selected_stack, project_name, "backend", required_inputs=required_inputs))
+        files.update(_build_backend_only_root_scripts())
     else:
         files.update(
             _build_frontend_files(
                 str(selected_stack.get("frontend") or "React"),
                 project_name,
-                "",
+                "frontend",
             )
         )
-        files.update(_build_root_scripts(selected_stack, project_kind))
+        files.update(_build_frontend_only_root_scripts())
     return [{"path": path, "content": content} for path, content in files.items()]
 
 
@@ -1252,7 +1320,7 @@ class {_safe_component_name(stem)}:
 
     if extension == ".java":
         class_name = _safe_component_name(stem)
-        return f"""package com.example.demo.service;
+        return f"""package com.example.app.service;
 
 import org.springframework.stereotype.Service;
 
@@ -1280,6 +1348,12 @@ def _ensure_minimum_project_files(
     if template_family == "puzzle-game":
         for path, content in _build_puzzle_game_files(project_name).items():
             merged.setdefault(path, content)
+    elif project_kind["hasBackend"] and not project_kind["isFullStack"]:
+        for path, content in _build_backend_only_root_scripts().items():
+            merged.setdefault(path, content)
+    elif project_kind["hasFrontend"] and not project_kind["isFullStack"]:
+        for path, content in _build_frontend_only_root_scripts().items():
+            merged.setdefault(path, content)
     else:
         for path, content in _build_root_scripts(selected_stack, project_kind).items():
             merged.setdefault(path, content)
@@ -1301,13 +1375,13 @@ def _ensure_minimum_project_files(
         ).items():
             merged.setdefault(path, content)
     elif project_kind["hasBackend"]:
-        for path, content in _build_backend_files(selected_stack, project_name, "", required_inputs=required_inputs).items():
+        for path, content in _build_backend_files(selected_stack, project_name, "backend", required_inputs=required_inputs).items():
             merged.setdefault(path, content)
     else:
         for path, content in _build_frontend_files(
             str(selected_stack.get("frontend") or "React"),
             project_name,
-            "",
+            "frontend",
         ).items():
             merged.setdefault(path, content)
 
@@ -1417,8 +1491,10 @@ def _build_backend_files(
     required_inputs: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, str]:
     backend = str(selected_stack.get("backend") or "FastAPI")
-    if backend in {"FastAPI", "Flask"}:
+    if backend == "FastAPI":
         return _build_fastapi_backend_files(project_name, prefix, required_inputs=required_inputs)
+    if backend == "Flask":
+        return _build_flask_backend_files(project_name, prefix, required_inputs=required_inputs)
     if backend in {"Express", "NestJS"}:
         return _build_express_backend_files(project_name, prefix)
     if backend == "Spring Boot":
@@ -1646,6 +1722,7 @@ function shuffleBoard(state) {
       const swapIndex = Math.floor(Math.random() * (index + 1));
       [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
     }
+
   } while (!isSolvable(shuffled) || isSolved(shuffled));
   return shuffled;
 }
@@ -1743,6 +1820,37 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 echo "Serving the puzzle game at http://127.0.0.1:4173"
 cd "$SCRIPT_DIR"
 python3 -m http.server 4173
+""",
+    }
+
+
+def _build_cpp_files(project_name: str) -> dict[str, str]:
+    return {
+        "main.cpp": f"""#include <iostream>
+#include <string>
+
+int main() {{
+    std::cout << "{project_name} is running." << std::endl;
+    std::cout << "This starter is ready for C++ feature development." << std::endl;
+    return 0;
+}}
+""",
+        "run.bat": """@echo off
+setlocal
+g++ main.cpp -o app.exe
+app.exe
+""",
+        "run.sh": """#!/usr/bin/env bash
+set -e
+g++ main.cpp -o app
+./app
+""",
+        "setup.bat": """@echo off
+echo No package install is required. Ensure g++ or MSVC is installed.
+""",
+        "setup.sh": """#!/usr/bin/env bash
+set -e
+echo "No package install is required. Ensure g++ is installed."
 """,
     }
 
@@ -1937,6 +2045,91 @@ settings = Settings()
 """,
     }
     files.update(_build_backend_subproject_scripts("FastAPI", prefix))
+    return files
+
+
+def _build_flask_backend_files(
+    project_name: str,
+    prefix: str,
+    *,
+    required_inputs: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, str]:
+    app_prefix = _prefixed(prefix, "app")
+    runtime_env_lines = _build_fastapi_runtime_setting_lines(required_inputs)
+    files = {
+        _prefixed(prefix, "requirements.txt"): "\n".join(
+            [
+                "flask",
+                "python-dotenv",
+                "",
+            ]
+        ),
+        _prefixed(app_prefix, "__init__.py"): '"""Application package for the generated Flask backend."""\n',
+        _prefixed(app_prefix, "main.py"): """from flask import Flask, jsonify
+
+from app.config import settings
+
+
+app = Flask(__name__)
+
+
+@app.get("/")
+def read_root():
+    return jsonify(
+        {
+            "status": "ok",
+            "message": "Project is running",
+            "environment": settings.app_env,
+        }
+    )
+
+
+@app.get("/health")
+def healthcheck():
+    return jsonify({"status": "ok", "message": "Project is running"})
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=settings.port, debug=True)
+""",
+        _prefixed(app_prefix, "config.py"): f"""import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+
+def _load_dotenv() -> None:
+    for candidate in [Path(".env"), Path(__file__).resolve().parents[1] / ".env"]:
+        if candidate.exists():
+            load_dotenv(candidate, override=False)
+
+
+def get_env(name: str, default: str | None = None, required: bool = False, example: str = "") -> str:
+    value = os.getenv(name)
+    if value:
+        return value
+    if not required:
+        return default or ""
+    prompt = f"Enter {{name}}"
+    if example:
+        prompt += f" (example: {{example}})"
+    prompt += ": "
+    return input(prompt).strip()
+
+
+class Settings:
+    def __init__(self) -> None:
+{runtime_env_lines}
+
+
+settings = Settings()
+""",
+        _prefixed(app_prefix, "services/__init__.py"): '"""Service package for generated backend logic."""\n',
+        _prefixed(app_prefix, "services/app_service.py"): f"""def get_app_summary() -> str:
+    return "{project_name} includes a Flask backend with health checks and configuration."
+""",
+    }
+    files.update(_build_backend_subproject_scripts("Flask", prefix))
     return files
 
 
@@ -2239,7 +2432,7 @@ document.querySelector("#app").innerHTML = renderHomePage("{project_name}");
 
 
 def _build_spring_backend_files(project_name: str, prefix: str) -> dict[str, str]:
-    java_base = _prefixed(prefix, "src/main/java/com/example/demo")
+    java_base = _prefixed(prefix, "src/main/java/com/example/app")
     resources_base = _prefixed(prefix, "src/main/resources")
     files = {
         _prefixed(prefix, "pom.xml"): """<project xmlns="http://maven.apache.org/POM/4.0.0"
@@ -2277,7 +2470,7 @@ def _build_spring_backend_files(project_name: str, prefix: str) -> dict[str, str
   </build>
 </project>
 """,
-        _prefixed(java_base, "Application.java"): """package com.example.demo;
+        _prefixed(java_base, "Application.java"): """package com.example.app;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -2289,18 +2482,18 @@ public class Application {
     }
 }
 """,
-        _prefixed(java_base, "controller/AppController.java"): """package com.example.demo.controller;
+        _prefixed(java_base, "controller/HealthController.java"): """package com.example.app.controller;
 
-import com.example.demo.service.AppService;
+import com.example.app.service.AppService;
 import java.util.Map;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-public class AppController {
+public class HealthController {
     private final AppService appService;
 
-    public AppController(AppService appService) {
+    public HealthController(AppService appService) {
         this.appService = appService;
     }
 
@@ -2310,7 +2503,7 @@ public class AppController {
     }
 }
 """,
-        _prefixed(java_base, "service/AppService.java"): f"""package com.example.demo.service;
+        _prefixed(java_base, "service/AppService.java"): f"""package com.example.app.service;
 
 import org.springframework.stereotype.Service;
 
@@ -2321,7 +2514,7 @@ public class AppService {{
     }}
 }}
 """,
-        _prefixed(java_base, "model/AppModel.java"): """package com.example.demo.model;
+        _prefixed(java_base, "model/AppModel.java"): """package com.example.app.model;
 
 public class AppModel {
     private Long id;
@@ -2333,9 +2526,9 @@ public class AppModel {
     public void setName(String name) { this.name = name; }
 }
 """,
-        _prefixed(java_base, "repository/AppRepository.java"): """package com.example.demo.repository;
+        _prefixed(java_base, "repository/AppRepository.java"): """package com.example.app.repository;
 
-import com.example.demo.model.AppModel;
+import com.example.app.model.AppModel;
 import java.util.List;
 import org.springframework.stereotype.Repository;
 
@@ -2369,6 +2562,48 @@ def _build_root_scripts(
         if backend == "Spring Boot":
             return _build_java_scripts(".")
     return _build_node_scripts(".", "dev")
+
+
+def _build_backend_only_root_scripts() -> dict[str, str]:
+    return {
+        "setup.bat": """@echo off
+setlocal
+call backend\\setup.bat
+""",
+        "setup.sh": """#!/usr/bin/env bash
+set -e
+(cd backend && ./setup.sh)
+""",
+        "run.bat": """@echo off
+setlocal
+call backend\\run.bat
+""",
+        "run.sh": """#!/usr/bin/env bash
+set -e
+(cd backend && ./run.sh)
+""",
+    }
+
+
+def _build_frontend_only_root_scripts() -> dict[str, str]:
+    return {
+        "setup.bat": """@echo off
+setlocal
+call frontend\\setup.bat
+""",
+        "setup.sh": """#!/usr/bin/env bash
+set -e
+(cd frontend && ./setup.sh)
+""",
+        "run.bat": """@echo off
+setlocal
+call frontend\\run.bat
+""",
+        "run.sh": """#!/usr/bin/env bash
+set -e
+(cd frontend && ./run.sh)
+""",
+    }
 
 
 def _build_fullstack_scripts(selected_stack: Mapping[str, Any]) -> dict[str, str]:
@@ -2692,8 +2927,8 @@ def _protected_runtime_paths(
         return {"index.html", "style.css", "script.js", "setup.bat", "setup.sh", "run.bat", "run.sh"}
 
     paths: set[str] = {"setup.bat", "setup.sh", "run.bat", "run.sh"}
-    backend_prefix = "backend/" if project_kind["isFullStack"] else ""
-    frontend_prefix = "frontend/" if project_kind["isFullStack"] else ""
+    backend_prefix = "backend/" if project_kind["hasBackend"] else ""
+    frontend_prefix = "frontend/" if project_kind["hasFrontend"] else ""
 
     if project_kind["isFullStack"]:
         paths.update(
@@ -2735,8 +2970,8 @@ def _protected_runtime_paths(
             paths.update(
                 {
                     f"{backend_prefix}pom.xml",
-                    f"{backend_prefix}src/main/java/com/example/demo/Application.java",
-                    f"{backend_prefix}src/main/java/com/example/demo/controller/AppController.java",
+                    f"{backend_prefix}src/main/java/com/example/app/Application.java",
+                    f"{backend_prefix}src/main/java/com/example/app/controller/HealthController.java",
                     f"{backend_prefix}src/main/resources/application.properties",
                 }
             )
@@ -2786,8 +3021,8 @@ def _package_json_paths(
     if template_family == "puzzle-game":
         return []
     paths: list[str] = []
-    backend_prefix = "backend/" if project_kind["isFullStack"] else ""
-    frontend_prefix = "frontend/" if project_kind["isFullStack"] else ""
+    backend_prefix = "backend/" if project_kind["hasBackend"] else ""
+    frontend_prefix = "frontend/" if project_kind["hasFrontend"] else ""
     if project_kind["hasBackend"] and str(selected_stack.get("backend") or "") in {"Express", "NestJS"}:
         paths.append(f"{backend_prefix}package.json")
     if project_kind["hasFrontend"]:
@@ -2818,8 +3053,8 @@ def _entry_validation_paths(
     if template_family == "puzzle-game":
         return ["index.html", "script.js"]
     paths: list[str] = []
-    backend_prefix = "backend/" if project_kind["isFullStack"] else ""
-    frontend_prefix = "frontend/" if project_kind["isFullStack"] else ""
+    backend_prefix = "backend/" if project_kind["hasBackend"] else ""
+    frontend_prefix = "frontend/" if project_kind["hasFrontend"] else ""
     if project_kind["hasBackend"]:
         backend = str(selected_stack.get("backend") or "FastAPI")
         if backend in {"FastAPI", "Flask"}:
@@ -2827,7 +3062,7 @@ def _entry_validation_paths(
         elif backend in {"Express", "NestJS"}:
             paths.append(f"{backend_prefix}server.js")
         elif backend == "Spring Boot":
-            paths.append(f"{backend_prefix}src/main/java/com/example/demo/Application.java")
+            paths.append(f"{backend_prefix}src/main/java/com/example/app/Application.java")
     if project_kind["hasFrontend"]:
         frontend = str(selected_stack.get("frontend") or "React")
         if frontend in {"React", "Next.js", "Vue"}:
@@ -2843,14 +3078,16 @@ def _backend_endpoint_paths(
 ) -> list[str]:
     if not project_kind["hasBackend"]:
         return []
-    backend_prefix = "backend/" if project_kind["isFullStack"] else ""
+    backend_prefix = "backend/" if project_kind["hasBackend"] else ""
     backend = str(selected_stack.get("backend") or "FastAPI")
-    if backend in {"FastAPI", "Flask"}:
+    if backend == "FastAPI":
         return [f"{backend_prefix}app/main.py", f"{backend_prefix}app/routers/health.py"]
+    if backend == "Flask":
+        return [f"{backend_prefix}app/main.py"]
     if backend in {"Express", "NestJS"}:
         return [f"{backend_prefix}server.js", f"{backend_prefix}src/controllers/appController.js"]
     if backend == "Spring Boot":
-        return [f"{backend_prefix}src/main/java/com/example/demo/controller/AppController.java"]
+        return [f"{backend_prefix}src/main/java/com/example/app/controller/HealthController.java"]
     return []
 
 
@@ -2864,7 +3101,7 @@ def _frontend_page_paths(
         return []
     if template_family == "puzzle-game":
         return ["index.html", "script.js", "style.css"]
-    frontend_prefix = "frontend/" if project_kind["isFullStack"] else ""
+    frontend_prefix = "frontend/" if project_kind["hasFrontend"] else ""
     frontend = str(selected_stack.get("frontend") or "React")
     if frontend in {"React", "Next.js", "Vue"}:
         return [f"{frontend_prefix}src/App.jsx", f"{frontend_prefix}src/pages/HomePage.jsx"]
@@ -2890,6 +3127,8 @@ def _valid_entry_file(path: str, content: str) -> bool:
         return False
     lower = path.lower()
     if lower.endswith("app/main.py"):
+        if "from flask" in text:
+            return "app = Flask" in text and '@app.get("/")' in text
         return "FastAPI" in text and "app = FastAPI" in text and '@app.get("/")' in text
     if lower.endswith("server.js"):
         return "express" in text and 'app.use("/", indexRouter)' in text and "app.listen" in text
@@ -2922,7 +3161,7 @@ def _valid_backend_endpoint_file(path: str, content: str) -> bool:
         return 'app.use("/", indexRouter)' in content and "app.listen" in content
     if lower.endswith("appcontroller.js"):
         return 'status: "ok"' in content and 'message: "Project is running"' in content
-    if lower.endswith("appcontroller.java"):
+    if lower.endswith("appcontroller.java") or lower.endswith("healthcontroller.java"):
         return '"status", "ok"' in content and '"message", "Project is running"' in content
     return True
 
@@ -2953,7 +3192,7 @@ def _build_safe_fallback_content(path: str, project_name: str) -> str:
 }};
 """
     if lower.endswith(".java"):
-        return """package com.example.demo.service;
+        return """package com.example.app.service;
 
 public class SafeFallback {
     public String summary() {

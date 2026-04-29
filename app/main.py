@@ -34,6 +34,13 @@ class StackSelectionPayload(BaseModel):
     database: str = "Auto"
     aiTools: str = "Auto"
     deployment: str = "Auto"
+    source: str = ""
+    runtimeTools: list[str] = Field(default_factory=list)
+    packageManager: str = ""
+    lastModifiedField: str = ""
+    lastModifiedAt: float | None = None
+    isUserConfirmedStack: bool = False
+    isDirty: bool = False
 
 
 class EnvVariablePayload(BaseModel):
@@ -53,6 +60,8 @@ class RequiredInputPayload(BaseModel):
 class SuggestRequest(BaseModel):
     idea: str = Field(..., min_length=1)
     selectedStack: StackSelectionPayload | None = None
+    stackSelectionSource: str = ""
+    isUserConfirmedStack: bool = False
     generationMode: str = "fast"
     finalRequirements: str = ""
 
@@ -115,6 +124,8 @@ class PreviewPayload(BaseModel):
     stackAnalysis: dict[str, Any] = Field(default_factory=dict)
     detectedUserChoices: list[str] = Field(default_factory=list)
     selectedStack: StackSelectionPayload = Field(default_factory=StackSelectionPayload)
+    stackSelectionSource: str = ""
+    isUserConfirmedStack: bool = False
     chosenStack: list[str] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
     summary: str = ""
@@ -154,6 +165,8 @@ async def suggest_project(payload: SuggestRequest) -> JSONResponse:
             idea,
             generation_mode=payload.generationMode,
             selected_stack=payload.selectedStack.model_dump() if payload.selectedStack else None,
+            stack_selection_source=payload.stackSelectionSource,
+            is_user_confirmed_stack=payload.isUserConfirmedStack,
             final_requirements=payload.finalRequirements,
         )
     except RuntimeError as exc:

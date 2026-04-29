@@ -176,6 +176,10 @@ details summary:focus {
   gap: 10px;
 }
 
+.inline-question-actions {
+  margin-top: 12px;
+}
+
 .action-row {
   margin-top: 16px;
 }

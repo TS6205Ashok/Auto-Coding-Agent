@@ -113,6 +113,8 @@ class CodeGenerationAgent:
             "projectName": context.project_name or ai.clean_project_name(None, context.prompt),
             "detectedUserChoices": context.detected_user_choices,
             "selectedStack": context.selected_stack,
+            "stackSelectionSource": context.stack_selection_source,
+            "isUserConfirmedStack": context.is_user_confirmed_stack,
             "projectType": context.declared_project_type or context.project_kind.get("label", ""),
             "modules": context.modules,
             "packageRequirements": context.package_requirements,
@@ -135,6 +137,8 @@ class CodeGenerationAgent:
                 raw_files=context.files,
             ),
         }
+        if context.final_architecture:
+            raw_preview["finalArchitecture"] = context.final_architecture.to_dict()
         if context.template_family:
             raw_preview["templateFamily"] = context.template_family
         return ai.normalize_preview(

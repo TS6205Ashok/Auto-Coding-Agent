@@ -42,12 +42,26 @@ class OrchestratorAgent:
         prompt: str,
         generation_mode: str,
         selected_stack: Mapping[str, Any] | None = None,
+        stack_selection_source: str = "",
+        is_user_confirmed_stack: bool = False,
         final_requirements: str = "",
     ) -> dict[str, Any]:
+        source = stack_selection_source or str((selected_stack or {}).get("source") or "")
+        confirmed = bool(
+            is_user_confirmed_stack
+            or (selected_stack or {}).get("isUserConfirmedStack")
+            or (selected_stack or {}).get("is_user_confirmed")
+            or (selected_stack or {}).get("isDirty")
+            or (selected_stack or {}).get("is_dirty")
+        )
         context = AgentWorkflowContext(
             prompt=prompt,
             generation_mode=generation_mode,
             requested_stack=ai.normalize_stack_selection(selected_stack),
+            stack_selection_source=source,
+            is_user_confirmed_stack=confirmed,
+            last_modified_field=str((selected_stack or {}).get("lastModifiedField") or (selected_stack or {}).get("last_modified_field") or ""),
+            last_modified_at=(selected_stack or {}).get("lastModifiedAt") or (selected_stack or {}).get("last_modified_at"),
             final_requirements=final_requirements,
         )
         context = self.requirement_agent.run(context)

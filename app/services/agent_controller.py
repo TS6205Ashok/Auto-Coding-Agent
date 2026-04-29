@@ -11,6 +11,7 @@ from app.agents.orchestrator_agent import orchestrator_agent
 from app.agents.repair_agent import RepairAgent
 from app.agents.requirement_agent import RequirementAgent
 from app.services import ai_service as ai
+from app.services.architecture_registry import final_architecture_from_preview
 
 
 @dataclass(slots=True)
@@ -275,12 +276,16 @@ class AgentController:
         prompt: str,
         generation_mode: str = "fast",
         selected_stack: Mapping[str, Any] | None = None,
+        stack_selection_source: str = "",
+        is_user_confirmed_stack: bool = False,
         final_requirements: str = "",
     ) -> dict[str, Any]:
         return await self.orchestrator.run(
             prompt,
             generation_mode,
             selected_stack=selected_stack,
+            stack_selection_source=stack_selection_source,
+            is_user_confirmed_stack=is_user_confirmed_stack,
             final_requirements=final_requirements,
         )
 
@@ -289,12 +294,16 @@ class AgentController:
         idea: str,
         selected_stack: dict[str, str] | None = None,
         generation_mode: str = "fast",
+        stack_selection_source: str = "",
+        is_user_confirmed_stack: bool = False,
         final_requirements: str = "",
     ) -> dict[str, Any]:
         return await self.build_preview(
             idea,
             generation_mode=generation_mode,
             selected_stack=selected_stack,
+            stack_selection_source=stack_selection_source,
+            is_user_confirmed_stack=is_user_confirmed_stack,
             final_requirements=final_requirements,
         )
 
@@ -342,12 +351,27 @@ class AgentController:
         *,
         selected_stack: Mapping[str, Any] | None = None,
         generation_mode: str = "fast",
+        stack_selection_source: str = "",
+        is_user_confirmed_stack: bool = False,
         final_requirements: str = "",
     ) -> AgentWorkflowContext:
+        normalized_stack = ai.normalize_stack_selection(selected_stack)
+        source = stack_selection_source or str((selected_stack or {}).get("source") or "")
+        confirmed = bool(
+            is_user_confirmed_stack
+            or (selected_stack or {}).get("isUserConfirmedStack")
+            or (selected_stack or {}).get("is_user_confirmed")
+            or (selected_stack or {}).get("isDirty")
+            or (selected_stack or {}).get("is_dirty")
+        )
         workflow = AgentWorkflowContext(
             prompt=prompt,
             generation_mode=generation_mode,
-            requested_stack=ai.normalize_stack_selection(selected_stack),
+            requested_stack=normalized_stack,
+            stack_selection_source=source,
+            is_user_confirmed_stack=confirmed,
+            last_modified_field=str((selected_stack or {}).get("lastModifiedField") or (selected_stack or {}).get("last_modified_field") or ""),
+            last_modified_at=(selected_stack or {}).get("lastModifiedAt") or (selected_stack or {}).get("last_modified_at"),
             final_requirements=final_requirements,
         )
         workflow = self.requirement_agent.run(workflow)
@@ -371,7 +395,8 @@ class AgentController:
         return workflow
 
     def _workflow_from_preview(self, preview: dict[str, Any]) -> AgentWorkflowContext:
-        selected_stack = ai.normalize_stack_selection(preview.get("selectedStack"))
+        final_architecture = final_architecture_from_preview(preview)
+        selected_stack = final_architecture.selected_stack
         project_kind = ai.determine_project_kind(selected_stack, preview.get("projectType"))
         return AgentWorkflowContext(
             prompt=str(preview.get("problemStatement") or preview.get("summary") or preview.get("projectName") or ""),
@@ -387,6 +412,7 @@ class AgentController:
             project_kind=project_kind,
             template_family=str(preview.get("templateFamily") or "").strip(),
             preview=dict(preview),
+            final_architecture=final_architecture,
         )
 
 
