@@ -1026,6 +1026,117 @@ class AgentControllerTests(unittest.TestCase):
         self.assertTrue(file_map["FULL_RUNTIME_INSTRUCTIONS.md"].strip())
         assert_full_runtime_instructions(self, file_map["FULL_RUNTIME_INSTRUCTIONS.md"])
 
+    def test_generated_projects_include_version_identity_metadata_and_output(self) -> None:
+        cases = [
+            (
+                "build sudoku game",
+                None,
+                "index.html",
+                "Open index.html directly in a browser",
+                ["index.html", "script.js"],
+            ),
+            (
+                "build API app",
+                {
+                    "language": "Auto",
+                    "frontend": "None",
+                    "backend": "FastAPI",
+                    "database": "SQLite",
+                    "aiTools": "None",
+                    "deployment": "Render",
+                },
+                "backend/app/main.py",
+                "cd backend && python -m uvicorn app.main:app --reload",
+                ["backend/app/main.py", "backend/app/routers/health.py"],
+            ),
+            (
+                "build Flask API app",
+                {
+                    "language": "Auto",
+                    "frontend": "None",
+                    "backend": "Flask",
+                    "database": "SQLite",
+                    "aiTools": "None",
+                    "deployment": "Render",
+                },
+                "backend/app/main.py",
+                "cd backend && python app/main.py",
+                ["backend/app/main.py"],
+            ),
+            (
+                "build React landing page",
+                {
+                    "language": "Auto",
+                    "frontend": "React",
+                    "backend": "None",
+                    "database": "None",
+                    "aiTools": "None",
+                    "deployment": "Vercel",
+                },
+                "frontend/src/main.jsx",
+                "cd frontend && npm run dev",
+                ["frontend/src/App.jsx", "frontend/src/components/AppShell.jsx"],
+            ),
+            (
+                "build Spring Boot app",
+                {
+                    "language": "Java",
+                    "frontend": "None",
+                    "backend": "Spring Boot",
+                    "database": "H2",
+                    "aiTools": "None",
+                    "deployment": "Render",
+                },
+                "backend/src/main/java/com/example/app/Application.java",
+                "cd backend && mvn spring-boot:run",
+                ["backend/src/main/java/com/example/app/controller/HealthController.java"],
+            ),
+            (
+                "build native starter",
+                {
+                    "language": "C++",
+                    "frontend": "None",
+                    "backend": "None",
+                    "database": "None",
+                    "aiTools": "None",
+                    "deployment": "None",
+                },
+                "main.cpp",
+                "g++ main.cpp -o app && ./app",
+                ["main.cpp"],
+            ),
+        ]
+
+        with patch.dict(os.environ, {"OLLAMA_BASE_URL": ""}, clear=False):
+            for prompt, selected_stack, main_file, run_command, source_paths in cases:
+                with self.subTest(prompt=prompt):
+                    preview = asyncio.run(
+                        agent_controller.generate_files(
+                            prompt,
+                            selected_stack=selected_stack,
+                            generation_mode="fast",
+                        )
+                    )
+
+                    file_map = {item["path"]: item["content"] for item in preview.get("files", [])}
+                    self.assertEqual(preview["generatedVersion"], "Project Agent Generated Starter v1")
+                    self.assertEqual(preview["mainFile"], main_file)
+                    self.assertEqual(preview["primaryRunCommand"], run_command)
+
+                    for doc_path in ["README.md", "FULL_RUNTIME_INSTRUCTIONS.md", "PROJECT_EXPLANATION.md"]:
+                        self.assertIn("Project Agent Generated Starter v1", file_map[doc_path])
+                        self.assertIn(main_file, file_map[doc_path])
+                        self.assertIn(run_command, file_map[doc_path])
+                        self.assertIn("Selected Stack", file_map[doc_path])
+
+                    self.assertTrue(
+                        any(
+                            "Project Agent Generated Starter v1" in file_map.get(path, "")
+                            for path in source_paths
+                        ),
+                        source_paths,
+                    )
+
 
 if __name__ == "__main__":
     unittest.main()

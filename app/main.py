@@ -124,6 +124,9 @@ class PreviewPayload(BaseModel):
     stackAnalysis: dict[str, Any] = Field(default_factory=dict)
     detectedUserChoices: list[str] = Field(default_factory=list)
     selectedStack: StackSelectionPayload = Field(default_factory=StackSelectionPayload)
+    generatedVersion: str = ""
+    mainFile: str = ""
+    primaryRunCommand: str = ""
     stackSelectionSource: str = ""
     isUserConfirmedStack: bool = False
     chosenStack: list[str] = Field(default_factory=list)

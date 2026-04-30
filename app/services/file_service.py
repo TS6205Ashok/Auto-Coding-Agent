@@ -22,6 +22,8 @@ SYSTEM_FILENAMES = {
     ".env.example",
 }
 
+GENERATED_VERSION_LABEL = "Project Agent Generated Starter v1"
+
 
 def slugify(value: str, fallback: str = "project-agent-output") -> str:
     slug = re.sub(r"[^a-zA-Z0-9]+", "-", value.lower()).strip("-")
@@ -114,6 +116,11 @@ def build_required_docs(
         preview.get("problemStatement") or "No problem statement was provided by the model."
     ).strip()
     selected_stack = preview.get("selectedStack") or {}
+    generated_version = str(preview.get("generatedVersion") or GENERATED_VERSION_LABEL).strip()
+    main_file = str(preview.get("mainFile") or _main_file_for_stack(selected_stack)).strip()
+    primary_run_command = str(
+        preview.get("primaryRunCommand") or _primary_run_command(selected_stack, run_commands)
+    ).strip()
     recommended_ide = str(preview.get("recommendedIde") or "").strip()
     alternative_ide = str(preview.get("alternativeIde") or "").strip()
     runtime_tools = _listify(preview.get("runtimeTools"))
@@ -142,6 +149,15 @@ def build_required_docs(
             "",
             "## What Was Generated",
             "This ZIP contains a 100% runnable starter project from the latest preview, including dependency files, setup scripts, run scripts, starter source code, and required input guidance.",
+            "",
+            "## Generated Project Identity",
+            _generated_identity_text(
+                project_name,
+                generated_version,
+                main_file,
+                primary_run_command,
+                selected_stack,
+            ),
             "",
             "## Problem Statement",
             problem_statement,
@@ -179,6 +195,8 @@ def build_required_docs(
             "- Full guided setup: `FULL_RUNTIME_INSTRUCTIONS.md`",
             "",
             "## How To Run",
+            f"- Main file: `{main_file}`",
+            f"- Primary run command: `{primary_run_command}`",
             _bullet_text(run_commands, "No run commands were provided."),
             "",
             "## Required Inputs",
@@ -199,6 +217,15 @@ def build_required_docs(
             "",
             "## Summary",
             summary,
+            "",
+            "## Generated Project Identity",
+            _generated_identity_text(
+                project_name,
+                generated_version,
+                main_file,
+                primary_run_command,
+                selected_stack,
+            ),
             "",
             "## Problem Statement",
             problem_statement,
@@ -222,6 +249,9 @@ def build_required_docs(
             "# Setup Instructions",
             "",
             "## Quick Start",
+            f"Generated version: {generated_version}",
+            f"Main file to open: `{main_file}`",
+            f"Primary run command: `{primary_run_command}`",
             "1. Run `run.bat` on Windows or `./run.sh` on Mac/Linux.",
             "2. Enter any missing required inputs when the app prompts for them at runtime.",
             "3. The application will finish startup automatically after dependencies install and required values are provided.",
@@ -471,6 +501,80 @@ def _selected_stack_text(selected_stack: dict[str, Any]) -> str:
         value = str(selected_stack.get(key) or "Auto").strip()
         lines.append(f"- {label}: {value}")
     return "\n".join(lines)
+
+
+def _generated_identity_text(
+    project_name: str,
+    generated_version: str,
+    main_file: str,
+    primary_run_command: str,
+    selected_stack: Mapping[str, Any],
+) -> str:
+    return "\n".join(
+        [
+            f"- Project name: {project_name}",
+            f"- Generated version: {generated_version}",
+            f"- Main file: `{main_file}`",
+            f"- Run command: `{primary_run_command}`",
+            "- Selected Stack:",
+            _selected_stack_text(dict(selected_stack)),
+        ]
+    )
+
+
+def _main_file_for_stack(selected_stack: Mapping[str, Any]) -> str:
+    language = str(selected_stack.get("language") or "")
+    frontend = str(selected_stack.get("frontend") or "")
+    backend = str(selected_stack.get("backend") or "")
+    if backend in {"FastAPI", "Flask"}:
+        return "backend/app/main.py"
+    if backend == "Spring Boot" or language == "Java":
+        return "backend/src/main/java/com/example/app/Application.java"
+    if backend == "Express":
+        return "backend/server.js"
+    if frontend == "React":
+        return "frontend/src/main.jsx"
+    if frontend == "HTML/CSS/JavaScript":
+        return "index.html"
+    if language == "C++":
+        return "main.cpp"
+    return "README.md"
+
+
+def main_file_for_stack(selected_stack: Mapping[str, Any]) -> str:
+    return _main_file_for_stack(selected_stack)
+
+
+def _primary_run_command(
+    selected_stack: Mapping[str, Any],
+    run_commands: Sequence[str] | None = None,
+) -> str:
+    backend = str(selected_stack.get("backend") or "")
+    frontend = str(selected_stack.get("frontend") or "")
+    language = str(selected_stack.get("language") or "")
+    if backend == "FastAPI":
+        return "cd backend && python -m uvicorn app.main:app --reload"
+    if backend == "Flask":
+        return "cd backend && python app/main.py"
+    if backend == "Spring Boot" or language == "Java":
+        return "cd backend && mvn spring-boot:run"
+    if backend == "Express":
+        return "cd backend && npm run dev"
+    if frontend == "React":
+        return "cd frontend && npm run dev"
+    if frontend == "HTML/CSS/JavaScript":
+        return "Open index.html directly in a browser"
+    if language == "C++":
+        return "g++ main.cpp -o app && ./app"
+    commands = [str(item) for item in (run_commands or []) if str(item).strip()]
+    return commands[0] if commands else "run.bat or ./run.sh"
+
+
+def primary_run_command(
+    selected_stack: Mapping[str, Any],
+    run_commands: Sequence[str] | None = None,
+) -> str:
+    return _primary_run_command(selected_stack, run_commands)
 
 
 def _env_variables_text(env_variables: list[dict[str, str]]) -> str:
@@ -823,12 +927,16 @@ def _build_full_runtime_instructions(
     expected_output = _expected_output_text(selected_stack)
     reset_text = _reset_instructions_text(selected_stack)
     migration_notes = _migration_notes_text(migration_summary)
+    generated_version = GENERATED_VERSION_LABEL
+    main_file = _main_file_for_stack(selected_stack)
+    primary_run_command = _primary_run_command(selected_stack, run_commands)
 
     sections = [
         "# Full Runtime Instructions",
         "",
         "## 1. PROJECT OVERVIEW",
         f"- Project: {project_name}",
+        f"- Generated version: {generated_version}",
         f"- What this project does: {summary}",
         "- Tech stack used:",
         _selected_stack_text(dict(selected_stack)),
@@ -837,6 +945,15 @@ def _build_full_runtime_instructions(
         "## 2. RECOMMENDED IDE",
         f"- Primary IDE: {recommended_ide or 'Not specified'}",
         f"- Alternative IDE: {alternative_ide or 'Not specified'}",
+        "",
+        "## Generated Project Identity",
+        _generated_identity_text(
+            project_name,
+            generated_version,
+            main_file,
+            primary_run_command,
+            selected_stack,
+        ),
         "",
         "## 3. REQUIRED EXTENSIONS / PLUGINS",
         extensions,
@@ -858,6 +975,8 @@ def _build_full_runtime_instructions(
         runtime_input_text,
         "",
         "## 8. HOW TO RUN THE PROJECT",
+        f"- Open main file: `{main_file}`",
+        f"- Primary run command: `{primary_run_command}`",
         _run_instructions_text(selected_stack, run_commands),
         "",
         "## 9. EXPECTED OUTPUT",
@@ -1546,6 +1665,7 @@ def _build_puzzle_game_files(project_name: str) -> dict[str, str]:
           <li>Move any tile touching the empty space.</li>
           <li>Put the numbers back in order to win.</li>
         </ol>
+        <p class="version-label">{GENERATED_VERSION_LABEL}</p>
       </section>
     </main>
     <script src="script.js"></script>
@@ -1684,7 +1804,8 @@ body {
   color: #3f566d;
 }
 """,
-        "script.js": """const GOAL_STATE = [1, 2, 3, 4, 5, 6, 7, 8, 0];
+        "script.js": """const GENERATED_VERSION = "Project Agent Generated Starter v1";
+const GOAL_STATE = [1, 2, 3, 4, 5, 6, 7, 8, 0];
 let boardState = [...GOAL_STATE];
 let moveCount = 0;
 
@@ -1831,6 +1952,7 @@ def _build_cpp_files(project_name: str) -> dict[str, str]:
 
 int main() {{
     std::cout << "{project_name} is running." << std::endl;
+    std::cout << "{GENERATED_VERSION_LABEL}" << std::endl;
     std::cout << "This starter is ready for C++ feature development." << std::endl;
     return 0;
 }}
@@ -1903,13 +2025,14 @@ def _build_fastapi_backend_files(
             ]
         ),
         _prefixed(app_prefix, "__init__.py"): '"""Application package for the generated backend."""\n',
-        _prefixed(app_prefix, "main.py"): """from fastapi import FastAPI
+        _prefixed(app_prefix, "main.py"): f"""from fastapi import FastAPI
 import uvicorn
 
 from app.config import settings
 from app.routers import health, items
 
 
+GENERATED_VERSION = "{GENERATED_VERSION_LABEL}"
 app = FastAPI(title="Project Agent Starter API")
 app.include_router(health.router)
 app.include_router(items.router, prefix="/api/items", tags=["items"])
@@ -1917,27 +2040,29 @@ app.include_router(items.router, prefix="/api/items", tags=["items"])
 
 @app.get("/")
 def read_root() -> dict[str, str]:
-    return {
+    return {{
         "status": "ok",
         "message": "Project is running",
+        "version": GENERATED_VERSION,
         "environment": settings.app_env,
-    }
+    }}
 
 
 if __name__ == "__main__":
     uvicorn.run("app.main:app", host="0.0.0.0", port=settings.port, reload=True)
 """,
         _prefixed(app_prefix, "routers/__init__.py"): '"""Router package for generated API endpoints."""\n',
-        _prefixed(app_prefix, "routers/health.py"): """from fastapi import APIRouter
+        _prefixed(app_prefix, "routers/health.py"): f"""from fastapi import APIRouter
 
 from app.schemas.health import HealthResponse
 
+GENERATED_VERSION = "{GENERATED_VERSION_LABEL}"
 router = APIRouter(tags=["health"])
 
 
 @router.get("/health", response_model=HealthResponse)
 def healthcheck() -> HealthResponse:
-    return HealthResponse(status="ok", message="Project is running")
+    return HealthResponse(status="ok", message="Project is running", version=GENERATED_VERSION)
 """,
         _prefixed(app_prefix, "routers/items.py"): """from fastapi import APIRouter
 
@@ -1991,6 +2116,7 @@ class ItemModel(Base):
 class HealthResponse(BaseModel):
     status: str
     message: str
+    version: str
 """,
         _prefixed(app_prefix, "schemas/item.py"): """from pydantic import BaseModel
 
@@ -2070,6 +2196,7 @@ def _build_flask_backend_files(
 from app.config import settings
 
 
+GENERATED_VERSION = "Project Agent Generated Starter v1"
 app = Flask(__name__)
 
 
@@ -2079,6 +2206,7 @@ def read_root():
         {
             "status": "ok",
             "message": "Project is running",
+            "version": GENERATED_VERSION,
             "environment": settings.app_env,
         }
     )
@@ -2086,7 +2214,7 @@ def read_root():
 
 @app.get("/health")
 def healthcheck():
-    return jsonify({"status": "ok", "message": "Project is running"})
+    return jsonify({"status": "ok", "message": "Project is running", "version": GENERATED_VERSION})
 
 
 if __name__ == "__main__":
@@ -2156,6 +2284,7 @@ import itemsRouter from "./src/routes/items.js";
 dotenv.config();
 
 const app = express();
+const generatedVersion = "Project Agent Generated Starter v1";
 app.use(cors());
 app.use(express.json());
 app.use("/", indexRouter);
@@ -2163,7 +2292,7 @@ app.use("/api/items", itemsRouter);
 
 const port = process.env.PORT || 8000;
 app.listen(port, () => {{
-  console.log("{project_name} API listening on port", port);
+  console.log("{project_name} API listening on port", port, generatedVersion);
 }});
 """,
         _prefixed(prefix, "src/routes/index.js"): """import { Router } from "express";
@@ -2182,8 +2311,10 @@ router.get("/", listItems);
 
 export default router;
 """,
-        _prefixed(prefix, "src/controllers/appController.js"): """export function getStatus(_req, res) {
-  res.json({ status: "ok", message: "Project is running" });
+        _prefixed(prefix, "src/controllers/appController.js"): """const generatedVersion = "Project Agent Generated Starter v1";
+
+export function getStatus(_req, res) {
+  res.json({ status: "ok", message: "Project is running", version: generatedVersion });
 }
 """,
         _prefixed(prefix, "src/controllers/itemController.js"): """import { getItems } from "../services/itemService.js";
@@ -2268,18 +2399,19 @@ import HomePage from "./pages/HomePage";
 
 export default function App() {{
   return (
-    <AppShell title="{project_name}">
+    <AppShell title="{project_name}" version="{GENERATED_VERSION_LABEL}">
       <HomePage />
     </AppShell>
   );
 }}
 """,
-        _prefixed(prefix, "src/components/AppShell.jsx"): """export default function AppShell({ title, children }) {
+        _prefixed(prefix, "src/components/AppShell.jsx"): """export default function AppShell({ title, version, children }) {
   return (
     <div className="app-shell">
       <header className="hero">
         <p className="eyebrow">Generated by Project Agent</p>
         <h1>{title}</h1>
+        <p>{version}</p>
       </header>
       <main>{children}</main>
     </div>
@@ -2390,6 +2522,7 @@ document.querySelector("#app").innerHTML = renderHomePage("{project_name}");
       <section class="card">
         <p class="eyebrow">Generated by Project Agent</p>
         <h1>${title}</h1>
+        <p>Project Agent Generated Starter v1</p>
         <p>This starter is ready for your first feature slice.</p>
       </section>
     </main>
@@ -2499,7 +2632,7 @@ public class HealthController {
 
     @GetMapping("/")
     public Map<String, String> status() {
-        return Map.of("status", "ok", "message", "Project is running");
+        return Map.of("status", "ok", "message", "Project is running", "version", "Project Agent Generated Starter v1");
     }
 }
 """,
@@ -2510,7 +2643,7 @@ import org.springframework.stereotype.Service;
 @Service
 public class AppService {{
     public String status() {{
-        return "Project is running";
+        return "Project is running - {GENERATED_VERSION_LABEL}";
     }}
 }}
 """,

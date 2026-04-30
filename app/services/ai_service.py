@@ -12,9 +12,12 @@ import httpx
 from dotenv import load_dotenv
 
 from .file_service import (
+    GENERATED_VERSION_LABEL,
     assemble_complete_preview_files,
     build_preview_file_tree,
     finalize_preview_files,
+    main_file_for_stack,
+    primary_run_command,
     required_preview_paths as _required_preview_paths,
 )
 
@@ -1499,6 +1502,9 @@ def normalize_preview(
         "migrationSummary",
         "stackAnalysis",
         "finalArchitecture",
+        "generatedVersion",
+        "mainFile",
+        "primaryRunCommand",
         "stackSelectionSource",
         "isUserConfirmedStack",
     ):
