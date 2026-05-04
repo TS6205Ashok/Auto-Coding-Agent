@@ -1138,6 +1138,8 @@ def _run_instructions_text(
     backend = str(selected_stack.get("backend") or "")
     frontend = str(selected_stack.get("frontend") or "")
     lines = [
+        "- IDE Play button: open `.vscode/launch.json`, choose the generated run configuration, and click Run/Play.",
+        "- VS Code Run Task: press Ctrl+Shift+P, choose `Tasks: Run Task`, then select `Run Project`.",
         "- Windows: `run.bat`",
         "- Mac/Linux: `chmod +x run.sh` then `./run.sh`",
     ]
@@ -1261,11 +1263,13 @@ def _build_standard_files(
 ) -> list[dict[str, str]]:
     if template_family == "puzzle-game":
         files = _build_puzzle_game_files(project_name)
+        files.update(_build_vscode_files(selected_stack, project_kind, template_family=template_family))
         return [{"path": path, "content": content} for path, content in files.items()]
 
     files: dict[str, str] = {}
     if str(selected_stack.get("language") or "") == "C++":
         files.update(_build_cpp_files(project_name))
+        files.update(_build_vscode_files(selected_stack, project_kind, template_family=template_family))
         return [{"path": path, "content": content} for path, content in files.items()]
     if project_kind["isFullStack"]:
         if project_kind["hasFrontend"]:
@@ -1298,6 +1302,7 @@ def _build_standard_files(
             )
         )
         files.update(_build_frontend_only_root_scripts())
+    files.update(_build_vscode_files(selected_stack, project_kind, template_family=template_family))
     return [{"path": path, "content": content} for path, content in files.items()]
 
 
@@ -3046,7 +3051,138 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 npm run dev
-""",
+        """,
+    }
+
+
+def _build_vscode_files(
+    selected_stack: Mapping[str, Any],
+    project_kind: Mapping[str, Any],
+    *,
+    template_family: str = "",
+) -> dict[str, str]:
+    backend = str(selected_stack.get("backend") or "None")
+    frontend = str(selected_stack.get("frontend") or "None")
+    language = str(selected_stack.get("language") or "")
+    main_file = _main_file_for_stack(selected_stack)
+    run_command = _primary_run_command(selected_stack, [])
+
+    tasks = {
+        "version": "2.0.0",
+        "tasks": [
+            {
+                "label": "Install Dependencies",
+                "type": "shell",
+                "command": "./setup.sh",
+                "windows": {"command": ".\\setup.bat"},
+                "detail": f"{GENERATED_VERSION_LABEL} | Main file: {main_file}",
+                "problemMatcher": [],
+                "group": "build",
+                "presentation": {"reveal": "always", "panel": "shared"},
+            },
+            {
+                "label": "Run Project",
+                "type": "shell",
+                "command": "./run.sh",
+                "windows": {"command": ".\\run.bat"},
+                "detail": f"{GENERATED_VERSION_LABEL} | Run command: {run_command}",
+                "problemMatcher": [],
+                "group": {"kind": "test", "isDefault": True},
+                "presentation": {"reveal": "always", "panel": "shared"},
+            },
+        ],
+    }
+
+    configurations: list[dict[str, Any]] = []
+    if template_family == "puzzle-game" or frontend == "HTML/CSS/JavaScript":
+        configurations.append(
+            {
+                "name": "Open Static App",
+                "type": "pwa-chrome",
+                "request": "launch",
+                "file": "${workspaceFolder}/index.html",
+            }
+        )
+    elif language == "C++":
+        configurations.append(
+            {
+                "name": "Run C++ Starter",
+                "type": "cppdbg",
+                "request": "launch",
+                "program": "${workspaceFolder}/app",
+                "args": [],
+                "cwd": "${workspaceFolder}",
+                "preLaunchTask": "Run Project",
+            }
+        )
+    elif backend in {"FastAPI", "Flask"}:
+        configurations.append(
+            {
+                "name": "Run Python Backend",
+                "type": "python",
+                "request": "launch",
+                "program": "${workspaceFolder}/backend/app/main.py",
+                "cwd": "${workspaceFolder}/backend",
+                "console": "integratedTerminal",
+                "envFile": "${workspaceFolder}/.env",
+            }
+        )
+    elif backend in {"Express", "NestJS"}:
+        configurations.append(
+            {
+                "name": "Run Node Backend",
+                "type": "node-terminal",
+                "request": "launch",
+                "command": "npm start",
+                "cwd": "${workspaceFolder}/backend",
+            }
+        )
+    elif backend == "Spring Boot":
+        configurations.append(
+            {
+                "name": "Run Spring Boot App",
+                "type": "java",
+                "request": "launch",
+                "mainClass": "com.example.app.Application",
+                "cwd": "${workspaceFolder}/backend",
+            }
+        )
+
+    if project_kind.get("hasFrontend") and frontend in {"React", "Next.js", "Vue"}:
+        configurations.append(
+            {
+                "name": "Run Frontend Dev Server",
+                "type": "node-terminal",
+                "request": "launch",
+                "command": "npm run dev",
+                "cwd": "${workspaceFolder}/frontend",
+            }
+        )
+
+    configurations.append(
+        {
+            "name": "Run Project Task",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": ".\\run.bat",
+            "cwd": "${workspaceFolder}",
+        }
+    )
+
+    launch = {
+        "version": "0.2.0",
+        "configurations": configurations,
+        "compounds": [
+            {
+                "name": "Project Agent: Run Main Project",
+                "configurations": [configurations[0]["name"]],
+            }
+        ],
+    }
+
+    return {
+        ".vscode/tasks.json": json.dumps(tasks, indent=2) + "\n",
+        ".vscode/launch.json": json.dumps(launch, indent=2) + "\n",
     }
 
 
@@ -3057,9 +3193,9 @@ def _protected_runtime_paths(
     template_family: str = "",
 ) -> set[str]:
     if template_family == "puzzle-game":
-        return {"index.html", "style.css", "script.js", "setup.bat", "setup.sh", "run.bat", "run.sh"}
+        return {"index.html", "style.css", "script.js", "setup.bat", "setup.sh", "run.bat", "run.sh", ".vscode/launch.json", ".vscode/tasks.json"}
 
-    paths: set[str] = {"setup.bat", "setup.sh", "run.bat", "run.sh"}
+    paths: set[str] = {"setup.bat", "setup.sh", "run.bat", "run.sh", ".vscode/launch.json", ".vscode/tasks.json"}
     backend_prefix = "backend/" if project_kind["hasBackend"] else ""
     frontend_prefix = "frontend/" if project_kind["hasFrontend"] else ""
 
@@ -3410,7 +3546,9 @@ def _merge_file_entries(
 
 def _clean_relative_path(value: Any) -> str:
     path = str(value or "").replace("\\", "/").strip().strip("/")
-    if not path or path.startswith(".") or ".." in path.split("/"):
+    if not path or ".." in path.split("/"):
+        return ""
+    if path.startswith(".") and not path.startswith(".vscode/"):
         return ""
     return path
 

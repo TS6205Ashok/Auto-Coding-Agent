@@ -82,6 +82,11 @@ DOC_FILES = [
     "PACKAGE_REQUIREMENTS.md",
 ]
 
+VSCODE_FILES = [
+    ".vscode/launch.json",
+    ".vscode/tasks.json",
+]
+
 CONFIG_DOC_FILES = [
     "REQUIRED_INPUTS.md",
     ".env.example",
@@ -102,7 +107,7 @@ STACK_REGISTRY: dict[str, StackRegistryEntry] = {
         alternative_ide="WebStorm",
         runtime_tools=["Modern browser"],
         package_manager="None",
-        required_files=["index.html", "style.css", "script.js", "run.sh", "run.bat", "setup.sh", "setup.bat", *DOC_FILES],
+        required_files=["index.html", "style.css", "script.js", "run.sh", "run.bat", "setup.sh", "setup.bat", *VSCODE_FILES, *DOC_FILES],
         forbidden_files=["backend/", "requirements.txt", "pom.xml", "backend/package.json"],
         forbidden_terms=["uvicorn", "FastAPI", "Flask", "Spring Boot", "pip install", "mvn ", "MySQL setup"],
         install_commands=["No install required"],
@@ -130,6 +135,7 @@ STACK_REGISTRY: dict[str, StackRegistryEntry] = {
             "backend/run.bat",
             "backend/setup.sh",
             "backend/setup.bat",
+            *VSCODE_FILES,
             ".env.example",
             "REQUIRED_INPUTS.md",
             *DOC_FILES,
@@ -162,6 +168,7 @@ STACK_REGISTRY: dict[str, StackRegistryEntry] = {
             "backend/run.bat",
             "backend/setup.sh",
             "backend/setup.bat",
+            *VSCODE_FILES,
             ".env.example",
             "REQUIRED_INPUTS.md",
             *DOC_FILES,
@@ -195,6 +202,7 @@ STACK_REGISTRY: dict[str, StackRegistryEntry] = {
             "backend/run.bat",
             "backend/setup.sh",
             "backend/setup.bat",
+            *VSCODE_FILES,
             ".env.example",
             "REQUIRED_INPUTS.md",
             *DOC_FILES,
@@ -219,7 +227,7 @@ STACK_REGISTRY: dict[str, StackRegistryEntry] = {
         alternative_ide="WebStorm",
         runtime_tools=["Node.js 20+", "npm"],
         package_manager="npm",
-        required_files=["backend/package.json", "backend/src/server.js", "backend/run.sh", "backend/run.bat", "backend/setup.sh", "backend/setup.bat", ".env.example", "REQUIRED_INPUTS.md", *DOC_FILES],
+        required_files=["backend/package.json", "backend/src/server.js", "backend/run.sh", "backend/run.bat", "backend/setup.sh", "backend/setup.bat", *VSCODE_FILES, ".env.example", "REQUIRED_INPUTS.md", *DOC_FILES],
         forbidden_files=["requirements.txt", "pom.xml", "backend/app/main.py", "src/main/java/"],
         forbidden_terms=["FastAPI", "Flask", "SpringApplication", "mvn ", "pip install"],
         install_commands=["cd backend", "npm install"],
@@ -240,7 +248,7 @@ STACK_REGISTRY: dict[str, StackRegistryEntry] = {
         alternative_ide="WebStorm",
         runtime_tools=["Node.js 20+", "npm"],
         package_manager="npm",
-        required_files=["frontend/package.json", "frontend/index.html", "frontend/src/main.jsx", "frontend/src/App.jsx", "frontend/src/styles.css", *DOC_FILES],
+        required_files=["frontend/package.json", "frontend/index.html", "frontend/src/main.jsx", "frontend/src/App.jsx", "frontend/src/styles.css", *VSCODE_FILES, *DOC_FILES],
         forbidden_files=["backend/", "requirements.txt", "pom.xml"],
         forbidden_terms=["FastAPI", "Flask", "Spring Boot", "uvicorn", "spring-boot:run"],
         install_commands=["cd frontend", "npm install"],
@@ -260,7 +268,7 @@ STACK_REGISTRY: dict[str, StackRegistryEntry] = {
         alternative_ide="Visual Studio",
         runtime_tools=["g++ or MSVC", "CMake optional"],
         package_manager="CMake",
-        required_files=["main.cpp", "run.sh", "run.bat", *DOC_FILES],
+        required_files=["main.cpp", "run.sh", "run.bat", *VSCODE_FILES, *DOC_FILES],
         forbidden_files=["requirements.txt", "pom.xml", "backend/app/main.py", "backend/", "package.json"],
         forbidden_terms=["FastAPI", "Flask", "Spring Boot", "uvicorn", "pip install", "npm install"],
         install_commands=["No package install required"],
@@ -535,4 +543,6 @@ def _with_react_files(required_files: list[str]) -> list[str]:
         "frontend/run.bat",
         "frontend/setup.sh",
         "frontend/setup.bat",
+        ".vscode/launch.json",
+        ".vscode/tasks.json",
     ]

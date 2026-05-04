@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 import unittest
@@ -1136,6 +1137,66 @@ class AgentControllerTests(unittest.TestCase):
                         ),
                         source_paths,
                     )
+
+    def test_generated_projects_include_vscode_run_support(self) -> None:
+        cases = [
+            ("build sudoku game", None),
+            (
+                "build API app",
+                {
+                    "language": "Auto",
+                    "frontend": "None",
+                    "backend": "FastAPI",
+                    "database": "SQLite",
+                    "aiTools": "None",
+                    "deployment": "Render",
+                },
+            ),
+            (
+                "build React landing page",
+                {
+                    "language": "Auto",
+                    "frontend": "React",
+                    "backend": "None",
+                    "database": "None",
+                    "aiTools": "None",
+                    "deployment": "Vercel",
+                },
+            ),
+            (
+                "build Spring Boot app",
+                {
+                    "language": "Java",
+                    "frontend": "None",
+                    "backend": "Spring Boot",
+                    "database": "H2",
+                    "aiTools": "None",
+                    "deployment": "Render",
+                },
+            ),
+        ]
+
+        with patch.dict(os.environ, {"OLLAMA_BASE_URL": ""}, clear=False):
+            for prompt, selected_stack in cases:
+                with self.subTest(prompt=prompt):
+                    preview = asyncio.run(
+                        agent_controller.generate_files(
+                            prompt,
+                            selected_stack=selected_stack,
+                            generation_mode="fast",
+                        )
+                    )
+
+                    file_map = {item["path"]: item["content"] for item in preview.get("files", [])}
+                    self.assertIn(".vscode/launch.json", file_map)
+                    self.assertIn(".vscode/tasks.json", file_map)
+                    launch = json.loads(file_map[".vscode/launch.json"])
+                    tasks = json.loads(file_map[".vscode/tasks.json"])
+                    self.assertTrue(launch["configurations"])
+                    task_labels = {task["label"] for task in tasks["tasks"]}
+                    self.assertIn("Install Dependencies", task_labels)
+                    self.assertIn("Run Project", task_labels)
+                    self.assertIn("Project Agent Generated Starter v1", file_map[".vscode/tasks.json"])
 
 
 if __name__ == "__main__":
