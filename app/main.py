@@ -182,6 +182,8 @@ class PreviewPayload(BaseModel):
     requestedFiles: list[RequestedFilePayload] = Field(default_factory=list)
     filesToRemove: list[FileRemovalPayload] = Field(default_factory=list)
     chatPendingCorrections: list[dict[str, Any]] = Field(default_factory=list)
+    projectContract: dict[str, Any] = Field(default_factory=dict)
+    validationStatus: dict[str, Any] = Field(default_factory=dict)
 
 
 class ZipRequest(BaseModel):

@@ -28,10 +28,10 @@ load_dotenv()
 
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 DEFAULT_OLLAMA_MODEL = "qwen2.5-coder"
-FAST_PLANNER_TIMEOUT_SECONDS = 4.0
+FAST_PLANNER_TIMEOUT_SECONDS = 2.0
 DEEP_PREVIEW_TIMEOUT_SECONDS = 70.0
 MIN_CUSTOM_PASS_SECONDS = 8.0
-MAX_CUSTOM_FILES = 8
+MAX_CUSTOM_FILES = 30
 MAX_CUSTOM_FILE_LINES = 300
 FAST_PLANNER_RESPONSE_BYTES_LIMIT = 48 * 1024
 REQUIRED_PLANNER_KEYS = {
@@ -472,7 +472,7 @@ Rules:
 3. Choose beginner-friendly defaults only for missing stack categories.
 4. For full-stack output, plan both frontend and backend.
 5. Do not include README, dependency manifests, setup scripts, run scripts, env files, config boilerplate, or installed libraries in customFiles.
-6. customFiles must contain only project-specific business logic files, max {MAX_CUSTOM_FILES}.
+6. customFiles must contain all project-specific business logic/UI/data files needed by named modules and workflows, max {MAX_CUSTOM_FILES}.
 7. Each custom file should be worth generating because it contains app-specific logic or UI, not generic boilerplate.
 8. Detect required external inputs and return them in requiredInputs.
 9. If the project uses auth, database, email, payments, AI providers, or OAuth, include the needed keys in requiredInputs.
@@ -526,7 +526,7 @@ Return this exact top-level shape:
 
 Mode:
 - generationMode: {generation_mode}
-- Fast Mode should keep customFiles compact and rely on backend templates for standard files.
+- Fast Mode should still include every project-specific router, service, page, component, client, and data file named or implied by the idea.
 - Deep Mode may propose richer custom business files, but still max {MAX_CUSTOM_FILES}.
 
 Selected stack:
@@ -1448,6 +1448,7 @@ def normalize_preview(
         required_inputs=required_inputs,
         template_family=template_family,
         custom_manifest=custom_manifest,
+        project_contract=raw.get("projectContract") if isinstance(raw.get("projectContract"), Mapping) else None,
         raw_files=[
             item for item in normalize_files(raw.get("files"))
             if item.get("path") not in removable_paths
@@ -1525,6 +1526,7 @@ def normalize_preview(
         "requestedFiles": custom_manifest,
         "filesToRemove": [{"path": path} for path in removed_paths],
         "chatPendingCorrections": list(raw.get("chatPendingCorrections") or []),
+        "projectContract": dict(raw.get("projectContract") or {}) if isinstance(raw.get("projectContract"), Mapping) else {},
         "files": validated_files,
     }
     for passthrough_key in (
@@ -1538,6 +1540,7 @@ def normalize_preview(
         "generatedVersion",
         "stackSelectionSource",
         "isUserConfirmedStack",
+        "validationStatus",
     ):
         if passthrough_key in raw:
             preview_payload[passthrough_key] = raw.get(passthrough_key)
@@ -1546,6 +1549,17 @@ def normalize_preview(
         selected_stack=selected_stack,
         project_kind=project_kind,
     )
+    if isinstance(preview_payload.get("projectContract"), Mapping):
+        complete_files = finalize_preview_files(
+            project_name=project_name,
+            selected_stack=selected_stack,
+            project_kind=project_kind,
+            required_inputs=required_inputs,
+            template_family=template_family,
+            custom_manifest=custom_manifest,
+            raw_files=complete_files,
+            project_contract=preview_payload["projectContract"],
+        )
     preview_payload["files"] = [item for item in complete_files if item.get("path") not in removable_paths]
     if template_family:
         preview_payload["templateFamily"] = template_family
@@ -1567,6 +1581,8 @@ def apply_custom_file_overrides(
         selected_stack=selected_stack,
         project_kind=project_kind,
         required_inputs=normalize_required_inputs(preview.get("requiredInputs")),
+        template_family=str(preview.get("templateFamily") or ""),
+        project_contract=preview.get("projectContract") if isinstance(preview.get("projectContract"), Mapping) else None,
         raw_files=merged_files,
     )
     complete_files, _ = assemble_complete_preview_files(

@@ -682,6 +682,16 @@ button:disabled {
   padding: 12px 18px;
   border-radius: 999px;
   box-shadow: 0 14px 30px rgba(15, 23, 42, 0.22);
+  transition: transform 180ms ease, box-shadow 180ms ease;
+}
+
+.chat-toggle-button.closed {
+  animation: chatPulse 2.2s infinite;
+}
+
+.chat-toggle-button.open {
+  transform: translateY(-4px) scale(1.04);
+  animation: none;
 }
 
 .chat-panel {
@@ -706,14 +716,23 @@ button:disabled {
   transition: opacity 180ms ease, transform 180ms ease;
 }
 
-.chat-panel[hidden] {
-  display: none;
-}
-
+.chat-panel.open,
 .chat-panel.is-open {
   opacity: 1;
   transform: translateY(0) scale(1);
   pointer-events: auto;
+}
+
+.chat-panel.closed {
+  opacity: 0;
+  transform: translateY(14px) scale(0.98);
+  pointer-events: none;
+}
+
+@keyframes chatPulse {
+  0% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.35); }
+  70% { box-shadow: 0 0 0 14px rgba(37, 99, 235, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0); }
 }
 
 .chat-header {

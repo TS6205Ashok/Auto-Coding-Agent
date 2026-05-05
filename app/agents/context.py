@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from app.services.architecture_registry import FinalArchitectureDecision
+    from app.agents.contract_agent import CompleteProjectContract
 
 
 @dataclass(slots=True)
@@ -42,6 +43,9 @@ class AgentWorkflowContext:
     assumptions: list[str] = field(default_factory=list)
     questions: list[dict[str, Any]] = field(default_factory=list)
     modules: list[dict[str, Any]] = field(default_factory=list)
+    domain_project_type: str = ""
+    domain_modules: list[dict[str, Any]] = field(default_factory=list)
+    domain_required_files: list[dict[str, str]] = field(default_factory=list)
     package_requirements: list[str] = field(default_factory=list)
     install_commands: list[str] = field(default_factory=list)
     run_commands: list[str] = field(default_factory=list)
@@ -66,3 +70,4 @@ class AgentWorkflowContext:
     fallback_reason: str = ""
     ai_raw_plan: dict[str, Any] = field(default_factory=dict)
     final_architecture: FinalArchitectureDecision | None = None
+    project_contract: CompleteProjectContract | None = None

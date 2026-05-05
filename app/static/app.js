@@ -720,16 +720,20 @@ async function handleConfirmZip() {
 
 // Chat popup functionality
 function openChatPanel() {
-  chatPanel.hidden = false;
-  chatPanel.classList.add("is-open");
+  chatPanel.classList.remove("closed");
+  chatPanel.classList.add("open", "is-open");
+  chatToggleButton.classList.remove("closed");
+  chatToggleButton.classList.add("open");
   chatToggleButton.setAttribute("aria-expanded", "true");
   renderChatMessages();
   chatInput.focus();
 }
 
 function closeChatPanel() {
-  chatPanel.classList.remove("is-open");
-  chatPanel.hidden = true;
+  chatPanel.classList.remove("open", "is-open");
+  chatPanel.classList.add("closed");
+  chatToggleButton.classList.remove("open");
+  chatToggleButton.classList.add("closed");
   chatToggleButton.setAttribute("aria-expanded", "false");
 }
 
@@ -1479,8 +1483,10 @@ function resetAll() {
   llmModeUsed = "free_rule_based";
   chatModeBadge.textContent = "Free Rule Mode";
   chatActionBar.hidden = true;
-  chatPanel.hidden = true;
-  chatPanel.classList.remove("is-open");
+  chatPanel.classList.remove("open", "is-open");
+  chatPanel.classList.add("closed");
+  chatToggleButton.classList.remove("open");
+  chatToggleButton.classList.add("closed");
   renderChatMessages();
   resetQuestionFlow();
   resetAgentActivity();

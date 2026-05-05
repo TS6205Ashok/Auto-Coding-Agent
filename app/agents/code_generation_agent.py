@@ -17,6 +17,8 @@ class CodeGenerationAgent:
         self.file_planning_agent = file_planning_agent
 
     async def run(self, context: AgentWorkflowContext) -> AgentWorkflowContext:
+        if context.project_contract is None:
+            raise RuntimeError("CodeGenerationAgent requires CompleteProjectContract before file generation.")
         deadline = self._build_deadline(context)
         if context.direct_generation_allowed:
             context.preview = self._build_preview(context)
@@ -138,6 +140,7 @@ class CodeGenerationAgent:
             "requestedFiles": context.custom_manifest,
             "filesToRemove": [{"path": path} for path in context.files_to_remove],
             "chatPendingCorrections": context.chat_pending_corrections,
+            "projectContract": context.project_contract.to_dict(),
             "summary": context.summary,
             "problemStatement": context.problem_statement,
             "assumptions": context.assumptions,
@@ -150,6 +153,7 @@ class CodeGenerationAgent:
                 custom_manifest=context.custom_manifest,
                 template_family=context.template_family,
                 raw_files=context.files,
+                project_contract=context.project_contract.to_dict(),
             ),
         }
         if context.final_architecture:

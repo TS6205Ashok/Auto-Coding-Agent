@@ -8,7 +8,7 @@ from typing import Any, Mapping, Sequence
 from app.services.architecture_registry import forbidden_path, registry_entry_for_selected
 
 
-MAX_GENERATED_FILES = 60
+MAX_GENERATED_FILES = 100
 MAX_FILE_SIZE_BYTES = 250 * 1024
 
 SYSTEM_FILENAMES = {
@@ -31,6 +31,8 @@ PLACEHOLDER_MARKERS = (
     "add your code here",
     "implement later",
     "sample only",
+    "coming soon",
+    "explanation instead of code",
     "not implemented",
 )
 
@@ -704,7 +706,7 @@ def _modules_text(modules: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-MAX_CUSTOM_TEMPLATE_FILES = 8
+MAX_CUSTOM_TEMPLATE_FILES = 30
 MAX_CUSTOM_FILE_LINES = 300
 
 
@@ -717,6 +719,7 @@ def finalize_preview_files(
     template_family: str = "",
     custom_manifest: Sequence[Mapping[str, Any]] | None = None,
     raw_files: Any = None,
+    project_contract: Mapping[str, Any] | None = None,
 ) -> list[dict[str, str]]:
     standard_files = _build_standard_files(
         project_name,
@@ -750,8 +753,20 @@ def finalize_preview_files(
         project_kind,
         required_inputs=required_inputs,
         template_family=template_family,
+        project_contract=project_contract,
     )
-    return validate_generated_files(repaired_files)
+    validated = validate_generated_files(repaired_files)
+    if project_contract:
+        validated = _ensure_contract_files(
+            validated,
+            project_name,
+            selected_stack,
+            project_kind,
+            required_inputs=required_inputs,
+            template_family=template_family,
+            project_contract=project_contract,
+        )
+    return validate_generated_files(validated)
 
 
 def build_preview_file_tree(
@@ -812,6 +827,7 @@ def collect_preview_validation_findings(
     selected_stack: Mapping[str, Any],
     project_kind: Mapping[str, Any],
     template_family: str = "",
+    project_contract: Mapping[str, Any] | None = None,
 ) -> list[str]:
     findings: list[str] = []
     try:
@@ -836,10 +852,21 @@ def collect_preview_validation_findings(
         elif not str(file_map[required_path]).strip():
             findings.append(f"Required file is empty: {required_path}")
 
+    contract_required_paths = _contract_required_paths(project_contract or preview.get("projectContract"))
+    for required_path in contract_required_paths:
+        if required_path not in file_map:
+            findings.append(f"Missing contract-required file: {required_path}")
+        elif not str(file_map[required_path]).strip():
+            findings.append(f"Contract-required file is empty: {required_path}")
+
     protected_paths = required_preview_paths(selected_stack, project_kind, template_family)
+    protected_paths.update(contract_required_paths)
     for removed_path in _removed_preview_paths(preview.get("filesToRemove")):
         if removed_path in file_map and removed_path not in protected_paths:
             findings.append(f"Removed optional file still exists: {removed_path}")
+    for removed_path in _contract_removed_paths(project_contract or preview.get("projectContract")):
+        if removed_path in file_map and removed_path not in protected_paths:
+            findings.append(f"Contract-removed optional file still exists: {removed_path}")
 
     for path, content in file_map.items():
         if _is_source_file(path) and _is_placeholder_only_source(content):
@@ -897,6 +924,8 @@ def collect_preview_validation_findings(
             if input_name and input_name not in config_text:
                 findings.append(f"Python backend config is missing required input helper usage: {input_name}")
 
+    findings.extend(_domain_contract_findings(project_contract or preview.get("projectContract"), file_map))
+
     migration_summary = preview.get("migrationSummary") or {}
     if isinstance(migration_summary, Mapping) and migration_summary:
         if "MIGRATION_SUMMARY.md" not in file_map:
@@ -946,6 +975,65 @@ def collect_preview_validation_findings(
     if target_frontend in {"HTML/CSS/JavaScript", "React"} and target_backend in {"None", "", "Auto"}:
         if any(path.startswith("backend/") for path in file_map):
             findings.append("Frontend-only targets must not include backend files.")
+
+    return findings
+
+
+def _domain_contract_findings(
+    project_contract: Mapping[str, Any] | None,
+    file_map: Mapping[str, str],
+) -> list[str]:
+    if not isinstance(project_contract, Mapping):
+        return []
+    project_type = str(project_contract.get("project_type") or project_contract.get("projectType") or "")
+    if project_type != "banking_chatbot":
+        return []
+
+    findings: list[str] = []
+    main_text = str(file_map.get("backend/app/main.py", ""))
+    if not all(marker in main_text for marker in ["chatbot", "banking", "include_router"]):
+        findings.append("Banking chatbot FastAPI main.py must include chatbot and banking routers.")
+
+    app_text = str(file_map.get("frontend/src/App.jsx", ""))
+    if "ChatbotPage" not in app_text:
+        findings.append("Banking chatbot React App.jsx must render ChatbotPage.")
+
+    chat_page_text = str(file_map.get("frontend/src/pages/ChatbotPage.jsx", ""))
+    if "ChatWindow" not in chat_page_text:
+        findings.append("Banking chatbot ChatbotPage.jsx must render ChatWindow.")
+
+    chat_window_text = str(file_map.get("frontend/src/components/ChatWindow.jsx", ""))
+    if "sendChatMessage" not in chat_window_text:
+        findings.append("Banking chatbot ChatWindow.jsx must call sendChatMessage.")
+
+    api_text = str(file_map.get("frontend/src/services/chatbotApi.js", ""))
+    if "/chat" not in api_text:
+        findings.append("Banking chatbot API client must call /api/chat.")
+
+    data_text = str(file_map.get("backend/app/data/dummy_customers.json", ""))
+    if data_text:
+        try:
+            parsed = json.loads(data_text)
+        except json.JSONDecodeError:
+            findings.append("Banking chatbot dummy customer data must be valid JSON.")
+        else:
+            blob = json.dumps(parsed)
+            for marker in ["CUST1001", "123456", "45230.75"]:
+                if marker not in blob:
+                    findings.append(f"Banking chatbot dummy customer data is missing {marker}.")
+
+    banking_service_text = str(file_map.get("backend/app/services/banking_service.py", ""))
+    if "dummy_customers.json" not in banking_service_text:
+        findings.append("Banking service must load backend/app/data/dummy_customers.json.")
+
+    chatbot_router_text = str(file_map.get("backend/app/routers/chatbot.py", ""))
+    if '@router.post("/chat"' not in chatbot_router_text:
+        findings.append("Banking chatbot router must expose POST /api/chat.")
+
+    banking_router_text = str(file_map.get("backend/app/routers/banking.py", ""))
+    for marker in ["balance", "transactions", "block-card", "loan", "complaint", "locations"]:
+        if marker not in banking_router_text:
+            findings.append(f"Banking router is missing {marker} support.")
 
     return findings
 
@@ -1541,6 +1629,9 @@ def _build_custom_template_content(
     stem = Path(path).stem
     pretty_name = stem.replace("_", " ").replace("-", " ").title()
     extension = Path(path).suffix.lower()
+    banking_content = _build_banking_chatbot_template(path, project_name)
+    if banking_content:
+        return banking_content
 
     if extension in {".jsx", ".tsx"}:
         if "page" in stem.lower() or "/pages/" in path:
@@ -1660,6 +1751,371 @@ public class {class_name} {{
     return f"# {pretty_name}\n\n{purpose}\n"
 
 
+def _build_banking_chatbot_template(path: str, project_name: str) -> str:
+    normalized = path.replace("\\", "/")
+    if normalized.endswith("backend/app/routers/chatbot.py"):
+        return """from pydantic import BaseModel
+from fastapi import APIRouter
+
+from app.services.chatbot_service import handle_chat_message
+
+
+router = APIRouter(tags=["chatbot"])
+
+
+class ChatRequest(BaseModel):
+    message: str
+    customer_id: str | None = None
+    otp: str | None = None
+    session_id: str = "default"
+
+
+class ChatResponse(BaseModel):
+    intent: str
+    reply: str
+    requires_customer_id: bool = False
+    requires_otp: bool = False
+
+
+@router.post("/chat", response_model=ChatResponse)
+def chat(request: ChatRequest) -> ChatResponse:
+    result = handle_chat_message(
+        message=request.message,
+        customer_id=request.customer_id,
+        otp=request.otp,
+        session_id=request.session_id,
+    )
+    return ChatResponse(**result)
+"""
+    if normalized.endswith("backend/app/routers/banking.py"):
+        return """from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException
+
+from app.services.banking_service import (
+    block_card,
+    get_balance,
+    get_complaint_status,
+    get_customer,
+    get_loan_details,
+    get_locations,
+    get_transactions,
+)
+
+
+router = APIRouter(tags=["banking"])
+
+
+class BlockCardRequest(BaseModel):
+    customer_id: str
+    otp: str
+    card_last4: str = "1234"
+
+
+@router.get("/customer/{customer_id}")
+def read_customer(customer_id: str) -> dict:
+    customer = get_customer(customer_id)
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    return customer
+
+
+@router.get("/balance/{customer_id}")
+def read_balance(customer_id: str) -> dict:
+    return get_balance(customer_id)
+
+
+@router.get("/transactions/{customer_id}")
+def read_transactions(customer_id: str) -> dict:
+    return {"transactions": get_transactions(customer_id)}
+
+
+@router.post("/block-card")
+def block_customer_card(payload: BlockCardRequest) -> dict:
+    return block_card(payload.customer_id, payload.otp, payload.card_last4)
+
+
+@router.get("/loan/{customer_id}")
+def read_loan(customer_id: str) -> dict:
+    return get_loan_details(customer_id)
+
+
+@router.get("/complaint/{complaint_id}")
+def read_complaint(complaint_id: str) -> dict:
+    return get_complaint_status(complaint_id)
+
+
+@router.get("/locations")
+def read_locations() -> dict:
+    return {"locations": get_locations()}
+"""
+    if normalized.endswith("backend/app/services/intent_service.py"):
+        return """def detect_intent(message: str) -> str:
+    text = message.lower()
+    if any(term in text for term in ["balance", "available amount", "account amount"]):
+        return "balance_enquiry"
+    if any(term in text for term in ["transaction", "statement", "recent spend"]):
+        return "recent_transactions"
+    if any(term in text for term in ["lost card", "block card", "debit card", "credit card"]):
+        return "card_blocking"
+    if any(term in text for term in ["loan", "emi"]):
+        return "loan_emi"
+    if any(term in text for term in ["complaint", "ticket", "case status"]):
+        return "complaint_status"
+    if any(term in text for term in ["branch", "atm", "location", "near me"]):
+        return "branch_atm_search"
+    if any(term in text for term in ["human", "agent", "representative"]):
+        return "human_agent_transfer"
+    return "faq"
+"""
+    if normalized.endswith("backend/app/services/banking_service.py"):
+        return """import json
+from pathlib import Path
+from typing import Any
+
+
+DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "dummy_customers.json"
+
+
+def _load_data() -> dict[str, Any]:
+    with DATA_PATH.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def get_customer(customer_id: str) -> dict[str, Any] | None:
+    return _load_data()["customers"].get(customer_id)
+
+
+def _require_customer(customer_id: str) -> dict[str, Any]:
+    customer = get_customer(customer_id)
+    if not customer:
+        raise ValueError(f"Customer {customer_id} was not found.")
+    return customer
+
+
+def verify_otp(customer_id: str, otp: str | None) -> bool:
+    customer = _require_customer(customer_id)
+    return str(customer.get("otp")) == str(otp or "")
+
+
+def get_balance(customer_id: str) -> dict[str, Any]:
+    customer = _require_customer(customer_id)
+    return {"customer_id": customer_id, "available_balance": customer["account_balance"]}
+
+
+def get_transactions(customer_id: str) -> list[dict[str, Any]]:
+    return list(_require_customer(customer_id).get("recent_transactions", []))
+
+
+def block_card(customer_id: str, otp: str | None, card_last4: str = "1234") -> dict[str, Any]:
+    if not verify_otp(customer_id, otp):
+        return {"status": "otp_required", "message": "OTP verification failed or is required."}
+    customer = _require_customer(customer_id)
+    for card in customer.get("cards", []):
+        if card.get("last4") == card_last4:
+            card["status"] = "blocked"
+            return {"status": "blocked", "message": f"Card ending with {card_last4} has been blocked."}
+    return {"status": "not_found", "message": "Card was not found."}
+
+
+def get_loan_details(customer_id: str) -> dict[str, Any]:
+    return dict(_require_customer(customer_id).get("loan", {}))
+
+
+def get_complaint_status(complaint_id: str) -> dict[str, Any]:
+    for customer in _load_data()["customers"].values():
+        for complaint in customer.get("complaints", []):
+            if complaint.get("complaint_id") == complaint_id:
+                return complaint
+    return {"complaint_id": complaint_id, "status": "not_found"}
+
+
+def get_locations() -> list[dict[str, Any]]:
+    return list(_load_data().get("locations", []))
+"""
+    if normalized.endswith("backend/app/services/chatbot_service.py"):
+        return """from app.services.banking_service import (
+    block_card,
+    get_balance,
+    get_complaint_status,
+    get_loan_details,
+    get_locations,
+    get_transactions,
+    verify_otp,
+)
+from app.services.intent_service import detect_intent
+
+
+SECURE_INTENTS = {"balance_enquiry", "recent_transactions", "card_blocking", "loan_emi"}
+
+
+def handle_chat_message(message: str, customer_id: str | None = None, otp: str | None = None, session_id: str = "default") -> dict:
+    intent = detect_intent(message)
+    if intent in SECURE_INTENTS and not customer_id:
+        return {
+            "intent": intent,
+            "reply": "Please enter your customer ID.",
+            "requires_customer_id": True,
+            "requires_otp": False,
+        }
+    if intent in SECURE_INTENTS and not verify_otp(customer_id or "", otp):
+        return {
+            "intent": intent,
+            "reply": "Please verify OTP. For demo customer CUST1001, use OTP 123456.",
+            "requires_customer_id": False,
+            "requires_otp": True,
+        }
+    if intent == "balance_enquiry":
+        balance = get_balance(customer_id or "")
+        return {"intent": intent, "reply": f"Your available balance is Rs. {balance['available_balance']:,.2f}."}
+    if intent == "recent_transactions":
+        transactions = get_transactions(customer_id or "")
+        lines = [f"{item['date']} - {item['description']} - Rs. {item['amount']}" for item in transactions]
+        return {"intent": intent, "reply": "Recent transactions: " + "; ".join(lines)}
+    if intent == "card_blocking":
+        result = block_card(customer_id or "", otp, "1234")
+        return {"intent": intent, "reply": result["message"]}
+    if intent == "loan_emi":
+        loan = get_loan_details(customer_id or "")
+        return {"intent": intent, "reply": f"Your loan EMI is Rs. {loan.get('emi')} due on {loan.get('next_due_date')}."}
+    if intent == "complaint_status":
+        return {"intent": intent, "reply": f"Complaint status: {get_complaint_status('CMP9001').get('status')}."}
+    if intent == "branch_atm_search":
+        locations = get_locations()
+        names = ", ".join(item["name"] for item in locations)
+        return {"intent": intent, "reply": f"Nearest branch/ATM options: {names}."}
+    if intent == "human_agent_transfer":
+        return {"intent": intent, "reply": "I am transferring you to a human support agent queue."}
+    return {"intent": intent, "reply": "I can help with balance, transactions, card blocking, loan EMI, complaints, branches, ATMs, and FAQs."}
+"""
+    if normalized.endswith("backend/app/data/dummy_customers.json"):
+        return json.dumps(
+            {
+                "customers": {
+                    "CUST1001": {
+                        "name": "Asha Kumar",
+                        "account_balance": 45230.75,
+                        "otp": "123456",
+                        "recent_transactions": [
+                            {"date": "2026-05-01", "description": "UPI grocery payment", "amount": 1250.0},
+                            {"date": "2026-05-02", "description": "Salary credit", "amount": 85000.0},
+                            {"date": "2026-05-04", "description": "ATM withdrawal", "amount": 5000.0},
+                        ],
+                        "cards": [{"type": "debit", "last4": "1234", "status": "active"}],
+                        "loan": {"type": "home loan", "emi": 18500, "next_due_date": "2026-06-05"},
+                        "complaints": [{"complaint_id": "CMP9001", "status": "In progress", "summary": "Debit card replacement request"}],
+                    }
+                },
+                "locations": [
+                    {"type": "branch", "name": "MG Road Branch", "address": "MG Road, Bengaluru"},
+                    {"type": "atm", "name": "Indiranagar ATM", "address": "100 Feet Road, Bengaluru"},
+                ],
+            },
+            indent=2,
+        ) + "\n"
+    if normalized.endswith("frontend/src/pages/ChatbotPage.jsx"):
+        return f"""import {{ useState }} from "react";
+import ChatWindow from "../components/ChatWindow";
+
+const initialMessages = [
+  {{
+    role: "bot",
+    content: "Welcome to {project_name}. Ask about balance, transactions, card blocking, loan EMI, complaints, branches, or ATMs."
+  }}
+];
+
+export default function ChatbotPage() {{
+  const [messages, setMessages] = useState(initialMessages);
+
+  function addMessage(message) {{
+    setMessages((current) => [...current, message]);
+  }}
+
+  return (
+    <main className="banking-page">
+      <section className="banking-hero">
+        <p className="eyebrow">Banking Chatbot / IVR</p>
+        <h1>{project_name}</h1>
+        <p>Demo customer: CUST1001. OTP: 123456.</p>
+      </section>
+      <ChatWindow messages={{messages}} onMessage={{addMessage}} />
+    </main>
+  );
+}}
+"""
+    if normalized.endswith("frontend/src/components/ChatWindow.jsx"):
+        return """import { useState } from "react";
+import MessageBubble from "./MessageBubble";
+import { sendChatMessage } from "../services/chatbotApi";
+
+export default function ChatWindow({ messages, onMessage }) {
+  const [message, setMessage] = useState("");
+  const [customerId, setCustomerId] = useState("CUST1001");
+  const [otp, setOtp] = useState("");
+  const [isSending, setIsSending] = useState(false);
+
+  async function handleSend(event) {
+    event.preventDefault();
+    const trimmed = message.trim();
+    if (!trimmed) return;
+    onMessage({ role: "user", content: trimmed });
+    setMessage("");
+    setIsSending(true);
+    try {
+      const response = await sendChatMessage({ message: trimmed, customer_id: customerId, otp });
+      onMessage({ role: "bot", content: response.reply });
+    } catch (error) {
+      onMessage({ role: "bot", content: error.message || "Unable to reach banking assistant." });
+    } finally {
+      setIsSending(false);
+    }
+  }
+
+  return (
+    <section className="chat-card">
+      <div className="chat-toolbar">
+        <input value={customerId} onChange={(event) => setCustomerId(event.target.value)} placeholder="Customer ID" />
+        <input value={otp} onChange={(event) => setOtp(event.target.value)} placeholder="OTP" />
+      </div>
+      <div className="message-list">
+        {messages.map((item, index) => <MessageBubble key={`${item.role}-${index}`} message={item} />)}
+      </div>
+      <form className="chat-form" onSubmit={handleSend}>
+        <input value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Ask a banking question..." />
+        <button type="submit" disabled={isSending}>{isSending ? "Sending..." : "Send"}</button>
+      </form>
+    </section>
+  );
+}
+"""
+    if normalized.endswith("frontend/src/components/MessageBubble.jsx"):
+        return """export default function MessageBubble({ message }) {
+  const isUser = message.role === "user";
+  return (
+    <article className={`message-bubble ${isUser ? "user" : "bot"}`}>
+      <span>{isUser ? "You" : "Banking Bot"}</span>
+      <p>{message.content}</p>
+    </article>
+  );
+}
+"""
+    if normalized.endswith("frontend/src/services/chatbotApi.js"):
+        return """const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api";
+
+export async function sendChatMessage(payload) {
+  const response = await fetch(`${API_BASE_URL}/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    throw new Error("Banking chatbot API request failed.");
+  }
+  return response.json();
+}
+"""
+    return ""
+
+
 def _ensure_minimum_project_files(
     files: Sequence[Mapping[str, str]],
     project_name: str,
@@ -1731,6 +2187,7 @@ def _repair_runtime_contract(
     *,
     required_inputs: Sequence[Mapping[str, Any]] | None = None,
     template_family: str = "",
+    project_contract: Mapping[str, Any] | None = None,
 ) -> list[dict[str, str]]:
     standard_map = {
         item["path"]: item["content"]
@@ -1755,6 +2212,15 @@ def _repair_runtime_contract(
             continue
         if not str(merged.get(required_path, "")).strip():
             merged[required_path] = template_content
+
+    if project_contract:
+        for required_path in _contract_required_paths(project_contract):
+            template_content = standard_map.get(required_path) or _build_safe_fallback_content(
+                required_path,
+                project_name,
+            )
+            if not str(merged.get(required_path, "")).strip():
+                merged[required_path] = template_content
 
     for path, content in list(merged.items()):
         if not str(content).strip():
@@ -1808,7 +2274,195 @@ def _repair_runtime_contract(
             if not str(merged.get(page_path, "")).strip():
                 merged[page_path] = template
 
+    if project_contract:
+        _apply_domain_integrations(merged, project_contract, project_name)
+
     return [{"path": path, "content": content} for path, content in merged.items()]
+
+
+def _ensure_contract_files(
+    files: Sequence[Mapping[str, str]],
+    project_name: str,
+    selected_stack: Mapping[str, Any],
+    project_kind: Mapping[str, Any],
+    *,
+    required_inputs: Sequence[Mapping[str, Any]] | None = None,
+    template_family: str = "",
+    project_contract: Mapping[str, Any],
+) -> list[dict[str, str]]:
+    repaired = _repair_runtime_contract(
+        files,
+        project_name,
+        selected_stack,
+        project_kind,
+        required_inputs=required_inputs,
+        template_family=template_family,
+        project_contract=project_contract,
+    )
+    removed = set(_contract_removed_paths(project_contract))
+    protected = set(_contract_required_paths(project_contract))
+    return [
+        item
+        for item in repaired
+        if item.get("path") not in removed or item.get("path") in protected
+    ]
+
+
+def _contract_required_paths(project_contract: Mapping[str, Any] | None) -> list[str]:
+    if not isinstance(project_contract, Mapping):
+        return []
+    value = project_contract.get("required_files") or project_contract.get("requiredFiles") or []
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        return []
+    return sorted({_clean_relative_path(path) for path in value if _clean_relative_path(path)})
+
+
+def _contract_removed_paths(project_contract: Mapping[str, Any] | None) -> list[str]:
+    if not isinstance(project_contract, Mapping):
+        return []
+    value = project_contract.get("files_to_remove") or project_contract.get("filesToRemove") or []
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        return []
+    paths: set[str] = set()
+    for item in value:
+        path = _clean_relative_path(item.get("path") if isinstance(item, Mapping) else item)
+        if path:
+            paths.add(path)
+    return sorted(paths)
+
+
+def _apply_domain_integrations(merged: dict[str, str], project_contract: Mapping[str, Any], project_name: str) -> None:
+    if str(project_contract.get("project_type") or project_contract.get("projectType") or "") != "banking_chatbot":
+        return
+    if "backend/app/main.py" in merged:
+        merged["backend/app/main.py"] = f"""from fastapi import FastAPI
+import uvicorn
+
+from app.config import settings
+from app.routers import banking, chatbot, health, items
+
+
+GENERATED_VERSION = "{GENERATED_VERSION_LABEL}"
+app = FastAPI(title="{project_name} API")
+app.include_router(health.router, prefix="/api")
+app.include_router(chatbot.router, prefix="/api")
+app.include_router(banking.router, prefix="/api/banking")
+app.include_router(items.router, prefix="/api/items", tags=["items"])
+
+
+@app.get("/")
+def read_root() -> dict[str, str]:
+    return {{
+        "status": "ok",
+        "message": "Project is running",
+        "version": GENERATED_VERSION,
+        "environment": settings.app_env,
+    }}
+
+
+if __name__ == "__main__":
+    uvicorn.run("app.main:app", host="0.0.0.0", port=settings.port, reload=True)
+"""
+    if "frontend/src/App.jsx" in merged:
+        merged["frontend/src/App.jsx"] = f"""import ChatbotPage from "./pages/ChatbotPage";
+import "./styles.css";
+
+export default function App() {{
+  return <ChatbotPage title="{project_name}" />;
+}}
+"""
+    if "frontend/src/styles.css" in merged and "message-bubble" not in merged["frontend/src/styles.css"]:
+        merged["frontend/src/styles.css"] = merged["frontend/src/styles.css"].rstrip() + """
+
+.banking-page {
+  min-height: 100vh;
+  padding: 32px 20px;
+  background: #eef4ff;
+}
+
+.banking-hero,
+.chat-card {
+  max-width: 920px;
+  margin: 0 auto 20px;
+}
+
+.chat-card {
+  display: grid;
+  gap: 14px;
+  padding: 20px;
+  border: 1px solid #d8e2f3;
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 18px 42px rgba(24, 54, 91, 0.12);
+}
+
+.chat-toolbar,
+.chat-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 10px;
+}
+
+.chat-form {
+  grid-template-columns: 1fr auto;
+}
+
+.chat-toolbar input,
+.chat-form input {
+  min-height: 42px;
+  padding: 10px 12px;
+  border: 1px solid #c6d3e6;
+  border-radius: 8px;
+}
+
+.chat-form button {
+  min-height: 42px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 8px;
+  background: #175cd3;
+  color: #fff;
+  font-weight: 700;
+}
+
+.message-list {
+  display: grid;
+  gap: 10px;
+  min-height: 320px;
+  align-content: start;
+}
+
+.message-bubble {
+  max-width: 78%;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #f3f7fc;
+}
+
+.message-bubble.user {
+  justify-self: end;
+  background: #175cd3;
+  color: #fff;
+}
+
+.message-bubble span {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.message-bubble p {
+  margin: 0;
+}
+
+@media (max-width: 720px) {
+  .chat-toolbar,
+  .chat-form {
+    grid-template-columns: 1fr;
+  }
+}
+"""
 
 
 def _build_backend_files(
@@ -2191,8 +2845,8 @@ def _build_fastapi_runtime_setting_lines(
 ) -> str:
     normalized_inputs = list(required_inputs or [])
     lines = [
-        '        self.app_env = get_env("APP_ENV", default="development")',
-        '        self.port = int(get_env("PORT", default="8000") or "8000")',
+        '        self.app_env = get_env("APP_ENV", required=False, default="development")',
+        '        self.port = int(get_env("PORT", required=False, default="8000") or "8000")',
     ]
     seen_names = {"APP_ENV", "PORT"}
     for item in normalized_inputs:
@@ -2203,11 +2857,12 @@ def _build_fastapi_runtime_setting_lines(
         example = str(item.get("example") or "").strip().replace("\\", "\\\\").replace('"', '\\"')
         required = bool(item.get("required", True))
         attribute_name = _safe_python_name(name)
+        purpose = str(item.get("purpose") or "").strip().replace("\\", "\\\\").replace('"', '\\"')
         if required:
-            line = f'        self.{attribute_name} = get_env("{name}", required=True, example="{example}")'
+            line = f'        self.{attribute_name} = get_env("{name}", description="{purpose}", required=True)'
         else:
             default = example or ""
-            line = f'        self.{attribute_name} = get_env("{name}", default="{default}", example="{example}")'
+            line = f'        self.{attribute_name} = get_env("{name}", description="{purpose}", required=False, default="{default}")'
         lines.append(line)
     return "\n".join(lines)
 
@@ -2358,17 +3013,20 @@ for candidate in (PROJECT_DIR / ".env", PARENT_PROJECT_DIR / ".env"):
         load_dotenv(candidate, override=False)
 
 
-def get_env(name: str, default: str | None = None, required: bool = False, example: str = "") -> str:
+def get_env(name: str, description: str = "", required: bool = True, default: str | None = None) -> str:
     value = os.getenv(name)
     if value:
         return value
     if not required:
         return default or ""
-    prompt = f"Enter {{name}}"
-    if example:
-        prompt += f" (example: {{example}})"
-    prompt += ": "
-    return input(prompt).strip()
+    print(f"Missing required input: {{name}}")
+    if description:
+        print(description)
+    prompt = f"Please enter {{name}}: "
+    value = input(prompt).strip()
+    if not value and required:
+        raise RuntimeError(f"{{name}} is required.")
+    return value
 
 
 class Settings:
@@ -2441,17 +3099,20 @@ def _load_dotenv() -> None:
             load_dotenv(candidate, override=False)
 
 
-def get_env(name: str, default: str | None = None, required: bool = False, example: str = "") -> str:
+def get_env(name: str, description: str = "", required: bool = True, default: str | None = None) -> str:
     value = os.getenv(name)
     if value:
         return value
     if not required:
         return default or ""
-    prompt = f"Enter {{name}}"
-    if example:
-        prompt += f" (example: {{example}})"
-    prompt += ": "
-    return input(prompt).strip()
+    print(f"Missing required input: {{name}}")
+    if description:
+        print(description)
+    prompt = f"Please enter {{name}}: "
+    value = input(prompt).strip()
+    if not value and required:
+        raise RuntimeError(f"{{name}} is required.")
+    return value
 
 
 class Settings:
@@ -2950,6 +3611,7 @@ set -e
 
 def _build_fullstack_scripts(selected_stack: Mapping[str, Any]) -> dict[str, str]:
     backend_setup = ""
+    backend_setup_unix = ""
     backend_run_windows = "echo No backend runtime configured.\n"
     backend_run_unix = 'echo "No backend runtime configured."\n'
     backend = str(selected_stack.get("backend") or "")
@@ -2964,6 +3626,16 @@ def _build_fullstack_scripts(selected_stack: Mapping[str, Any]) -> dict[str, str
             "  popd\n"
             ")\n"
         )
+        backend_setup_unix = """if [ -f backend/requirements.txt ]; then
+  (
+    cd backend
+    python3 -m venv .venv
+    . .venv/bin/activate
+    python -m pip install --upgrade pip
+    pip install -r requirements.txt
+  )
+fi
+"""
         backend_run_windows = (
             'start "Backend" cmd /k "cd backend && call run.bat"\n'
         )
@@ -2976,6 +3648,10 @@ def _build_fullstack_scripts(selected_stack: Mapping[str, Any]) -> dict[str, str
             "  popd\n"
             ")\n"
         )
+        backend_setup_unix = """if [ -f backend/package.json ]; then
+  (cd backend && npm install)
+fi
+"""
         backend_run_windows = 'start "Backend" cmd /k "cd backend && npm start"\n'
         backend_run_unix = '(cd backend && npm start) &\n'
     elif backend == "Spring Boot":
@@ -2986,6 +3662,14 @@ def _build_fullstack_scripts(selected_stack: Mapping[str, Any]) -> dict[str, str
             "  popd\n"
             ") || echo Maven not found. Skipping backend install.\n"
         )
+        backend_setup_unix = """if [ -f backend/pom.xml ]; then
+  if command -v mvn >/dev/null 2>&1; then
+    (cd backend && mvn install)
+  else
+    echo "Maven not found. Skipping backend install."
+  fi
+fi
+"""
         backend_run_windows = 'start "Backend" cmd /k "cd backend && mvn spring-boot:run"\n'
         backend_run_unix = '(cd backend && mvn spring-boot:run) &\n'
 
@@ -2999,27 +3683,9 @@ setlocal
 )
 echo Setup complete.
 """,
-        "setup.sh": """#!/usr/bin/env bash
+        "setup.sh": f"""#!/usr/bin/env bash
 set -e
-if [ -f backend/requirements.txt ]; then
-  (
-    cd backend
-    python3 -m venv .venv
-    . .venv/bin/activate
-    python -m pip install --upgrade pip
-    pip install -r requirements.txt
-  )
-fi
-if [ -f backend/package.json ]; then
-  (cd backend && npm install)
-fi
-if [ -f backend/pom.xml ]; then
-  if command -v mvn >/dev/null 2>&1; then
-    (cd backend && mvn install)
-  else
-    echo "Maven not found. Skipping backend install."
-  fi
-fi
+{backend_setup_unix}\
 if [ -f frontend/package.json ]; then
   (cd frontend && npm install)
 fi
@@ -3426,6 +4092,7 @@ def _protected_runtime_paths(
                     f"{backend_prefix}app/main.py",
                     f"{backend_prefix}app/routers/health.py",
                     f"{backend_prefix}app/schemas/health.py",
+                    f"{backend_prefix}app/services/app_service.py",
                     f"{backend_prefix}app/config.py",
                     f"{backend_prefix}app/database.py",
                 }
@@ -3691,6 +4358,10 @@ def _python_compiles(content: str) -> bool:
 
 
 def _build_safe_fallback_content(path: str, project_name: str) -> str:
+    domain_content = _build_banking_chatbot_template(path, project_name)
+    if domain_content:
+        return domain_content
+
     lower = path.lower()
     if lower.endswith(".py"):
         return f"""def generated_safe_summary() -> dict[str, str]:
@@ -3795,7 +4466,7 @@ def _clean_relative_path(value: Any) -> str:
     path = str(value or "").replace("\\", "/").strip().strip("/")
     if not path or ".." in path.split("/"):
         return ""
-    if path.startswith(".") and not path.startswith(".vscode/"):
+    if path.startswith(".") and not (path.startswith(".vscode/") or path == ".env.example"):
         return ""
     return path
 

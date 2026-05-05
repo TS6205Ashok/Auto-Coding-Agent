@@ -6,7 +6,9 @@ from typing import Any, Mapping
 
 from app.agents.architecture_agent import ArchitectureAgent
 from app.agents.code_generation_agent import CodeGenerationAgent
+from app.agents.contract_agent import ContractAgent
 from app.agents.context import AgentWorkflowContext
+from app.agents.domain_module_extraction_agent import DomainModuleExtractionAgent
 from app.agents.file_planning_agent import FilePlanningAgent
 from app.agents.migration_agent import MigrationAgent
 from app.agents.packaging_agent import PackagingAgent
@@ -27,8 +29,10 @@ class OrchestratorAgent:
         self.stack_analysis_agent = StackAnalysisAgent()
         self.migration_agent = MigrationAgent()
         self.architecture_agent = ArchitectureAgent()
+        self.domain_module_extraction_agent = DomainModuleExtractionAgent()
         self.file_planning_agent = FilePlanningAgent()
         self.tool_recommendation_agent = ToolRecommendationAgent()
+        self.contract_agent = ContractAgent()
         self.validation_agent = ValidationAgent()
         self.repair_agent = RepairAgent()
         self.packaging_agent = PackagingAgent(
@@ -74,7 +78,9 @@ class OrchestratorAgent:
         context = self.stack_analysis_agent.run(context)
         context = self.migration_agent.run(context)
         context = self.architecture_agent.run(context)
+        context = self.domain_module_extraction_agent.run(context)
         context = self.file_planning_agent.run(context)
+        context = self.contract_agent.run(context)
         context = await self.code_generation_agent.run(context)
         context = self.tool_recommendation_agent.run(context)
         context = self.packaging_agent.prepare_preview(context)
@@ -107,6 +113,8 @@ class OrchestratorAgent:
             chat_pending_corrections=list(preview.get("chatPendingCorrections") or []),
             preview=dict(preview),
         )
+        if isinstance(preview.get("projectContract"), Mapping):
+            context.preview["projectContract"] = dict(preview.get("projectContract") or {})
         context = self.packaging_agent.prepare_preview(context)
         return context.preview
 

@@ -396,6 +396,14 @@ class ChatCoordinatorAgent:
             files.append(self._file_for_feature("login", "Login page and authentication workflow", selected_stack))
         if "payment" in lowered or "checkout" in lowered:
             files.append(self._file_for_feature("payment", "Payment checkout page or handler", selected_stack))
+        if "profile" in lowered:
+            files.append(self._file_for_feature("profile", "Profile page and account details workflow", selected_stack))
+        if "controller" in lowered:
+            files.append(self._file_for_feature("controller", "Project controller requested from chat", selected_stack))
+        if "service" in lowered:
+            files.append(self._file_for_feature("service", "Project service layer requested from chat", selected_stack))
+        if " api" in lowered or " route" in lowered or "endpoint" in lowered:
+            files.append(self._file_for_feature("api", "API route requested from chat", selected_stack))
         explicit_paths = re.findall(r"[\w./-]+\.(?:py|js|jsx|java|cpp|html|css)", lowered)
         for path in explicit_paths:
             files.append({"path": self._clean_chat_path(path), "purpose": "User-requested project file.", "required": True})
@@ -417,7 +425,7 @@ class ChatCoordinatorAgent:
         candidates: list[str] = []
         explicit_paths = re.findall(r"[\w./-]+\.(?:py|js|jsx|java|cpp|html|css)", lowered)
         candidates.extend(self._clean_chat_path(path) for path in explicit_paths)
-        for feature in ["admin", "report", "login", "payment"]:
+        for feature in ["admin", "report", "login", "payment", "profile", "controller", "service", "api"]:
             if feature in lowered or (feature == "report" and "reports" in lowered):
                 candidates.append(self._file_for_feature(feature, f"Remove {feature} feature", selected_stack)["path"])
         existing_paths = {
@@ -450,16 +458,30 @@ class ChatCoordinatorAgent:
             "report": "ReportPage",
             "login": "LoginPage",
             "payment": "PaymentPage",
+            "profile": "ProfilePage",
+            "controller": "AppController",
+            "service": "AppService",
+            "api": "ApiRoute",
         }
         route_names = {
             "admin": "admin",
             "report": "reports",
             "login": "login",
             "payment": "payment",
+            "profile": "profile",
+            "controller": "app",
+            "service": "app",
+            "api": "api",
         }
         component = component_names.get(feature, "CustomPage")
         route = route_names.get(feature, ai.safe_js_name(feature))
-        if frontend == "React":
+        if backend == "FastAPI" and feature == "service":
+            path = f"backend/app/services/{route}_service.py"
+        elif backend == "Spring Boot" and feature == "service":
+            path = "backend/src/main/java/com/example/app/service/AppService.java"
+        elif backend == "Express" and feature == "service":
+            path = f"backend/src/services/{route}Service.js"
+        elif frontend == "React" and feature not in {"controller", "service", "api"}:
             path = f"frontend/src/pages/{component}.jsx"
         elif frontend == "HTML/CSS/JavaScript":
             path = f"pages/{route}.html"
@@ -487,14 +509,14 @@ class ChatCoordinatorAgent:
         )
 
     def _looks_like_file_request(self, lowered: str) -> bool:
-        return any(word in lowered for word in ["add", "create", "include"]) and any(
-            word in lowered for word in ["file", "page", "dashboard", "report", "login", "payment", "checkout"]
+        return any(word in lowered for word in ["add", "create", "include", "make"]) and any(
+            word in lowered for word in ["file", "page", "dashboard", "report", "login", "payment", "checkout", "profile", "controller", "service", "api", "route", "endpoint"]
         )
 
     def _looks_like_remove_request(self, lowered: str) -> bool:
         return any(word in lowered for word in ["remove", "delete", "drop"]) and any(
             word in lowered
-            for word in ["file", "page", "dashboard", "report", "login", "payment", "module", ".jsx", ".py", ".js", ".html", ".java", ".cpp"]
+            for word in ["file", "page", "dashboard", "report", "login", "payment", "profile", "controller", "service", "api", "route", "endpoint", "module", ".jsx", ".py", ".js", ".html", ".java", ".cpp"]
         )
 
     def _looks_like_project_action(self, lowered: str) -> bool:
@@ -510,7 +532,7 @@ class ChatCoordinatorAgent:
         if not any(word in lowered for word in ["add", "include", "make"]):
             return []
         features = []
-        for label in ["login", "email otp", "csv export", "payment", "admin dashboard"]:
+        for label in ["login", "email otp", "csv export", "payment", "admin dashboard", "profile", "controller", "service", "api route"]:
             if label in lowered:
                 features.append(label)
         return sorted(set(features))
@@ -519,7 +541,7 @@ class ChatCoordinatorAgent:
         if not self._looks_like_remove_request(lowered):
             return []
         features = []
-        for label in ["login", "email otp", "csv export", "payment", "admin dashboard", "report page"]:
+        for label in ["login", "email otp", "csv export", "payment", "admin dashboard", "report page", "profile", "controller", "service", "api route"]:
             if label in lowered or (label == "report page" and "report" in lowered):
                 features.append(label)
         return sorted(set(features))

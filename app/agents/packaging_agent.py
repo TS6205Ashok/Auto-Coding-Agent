@@ -24,12 +24,18 @@ class PackagingAgent:
         self.repair_agent = repair_agent
 
     def prepare_preview(self, context: AgentWorkflowContext) -> AgentWorkflowContext:
+        repair_attempts = 0
+        repaired_files: set[str] = set(context.repaired_files)
         context = self.validation_agent.run(context)
         if context.validation_findings:
+            repair_attempts += 1
             context = self.repair_agent.run(context)
+            repaired_files.update(context.repaired_files)
             context = self.validation_agent.run(context)
             if context.validation_findings:
+                repair_attempts += 1
                 context = self.repair_agent.run(context)
+                repaired_files.update(context.repaired_files)
                 context = self.validation_agent.run(context)
         context.preview["recommendedIde"] = context.recommended_ide or context.preview.get("recommendedIde", "")
         context.preview["alternativeIde"] = context.alternative_ide or context.preview.get("alternativeIde", "")
@@ -50,10 +56,51 @@ class PackagingAgent:
             }
         context.preview = ai.prepare_preview_for_output(context.preview)
         context = self.validation_agent.run(context)
-        if context.validation_findings:
+        if context.validation_findings and repair_attempts < 2:
+            repair_attempts += 1
             context = self.repair_agent.run(context)
+            repaired_files.update(context.repaired_files)
             context.preview = ai.prepare_preview_for_output(context.preview)
             context = self.validation_agent.run(context)
+        if context.validation_findings:
+            context.preview = ai.normalize_preview(
+                {
+                    "projectName": context.preview.get("projectName"),
+                    "projectType": context.preview.get("projectType"),
+                    "selectedStack": context.selected_stack or context.preview.get("selectedStack"),
+                    "requiredInputs": context.preview.get("requiredInputs", []),
+                    "customFiles": context.preview.get("customFiles", []),
+                    "filesToRemove": context.preview.get("filesToRemove", []),
+                    "chatPendingCorrections": context.preview.get("chatPendingCorrections", []),
+                    "finalArchitecture": context.final_architecture.to_dict() if context.final_architecture else context.preview.get("finalArchitecture"),
+                    "projectContract": context.preview.get("projectContract", {}),
+                    "templateFamily": context.template_family or context.preview.get("templateFamily", ""),
+                    "generatedVersion": context.preview.get("generatedVersion"),
+                    "recommendedIde": context.preview.get("recommendedIde"),
+                    "alternativeIde": context.preview.get("alternativeIde"),
+                    "runtimeTools": context.preview.get("runtimeTools", []),
+                    "packageManager": context.preview.get("packageManager", ""),
+                    "stackSelectionSource": context.preview.get("stackSelectionSource", ""),
+                    "isUserConfirmedStack": context.preview.get("isUserConfirmedStack", False),
+                    "migrationSummary": context.preview.get("migrationSummary", {}),
+                    "stackAnalysis": context.preview.get("stackAnalysis", {}),
+                    "assumptions": [
+                        *context.preview.get("assumptions", []),
+                        "Validation fallback rebuilt the project from deterministic safe templates after repair attempts.",
+                    ],
+                },
+                context.prompt,
+                context.selected_stack or context.preview.get("selectedStack"),
+                context.generation_mode,
+                context.final_requirements or context.prompt,
+            )
+            context = self.validation_agent.run(context)
+        context.preview["validationStatus"] = {
+            "valid": not bool(context.validation_findings),
+            "findings": list(context.validation_findings),
+            "repairAttempts": repair_attempts,
+            "repairedFiles": sorted(repaired_files),
+        }
         logger.info(
             "PackagingAgent prepared preview template=%s file_count=%s findings=%s",
             context.template_family or "generic",

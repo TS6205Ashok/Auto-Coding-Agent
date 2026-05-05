@@ -78,7 +78,7 @@ class FilePlanningAgent:
             )
         else:
             context.modules = ai.merge_modules(
-                ai.normalize_modules(raw.get("modules")),
+                ai.normalize_modules(raw.get("modules")) + context.domain_modules,
                 ai.build_default_modules(context.selected_stack, context.project_kind),
             )
             context.required_inputs = ai.merge_required_inputs(
@@ -126,6 +126,9 @@ class FilePlanningAgent:
             raw.get("customFiles") or context.requested_custom_files or context.custom_manifest,
             context.selected_stack,
             context.project_kind,
+        )
+        context.custom_manifest = ai.dedupe_manifest(
+            [*context.custom_manifest, *context.domain_required_files]
         )
         removed_paths = set(ai.normalize_removed_paths(raw.get("filesToRemove") or context.files_to_remove))
         context.files_to_remove = sorted(removed_paths)

@@ -1592,6 +1592,100 @@ class AgentControllerTests(unittest.TestCase):
                 any(name.endswith("frontend/src/pages/ReportPage.jsx") for name in archive.namelist())
             )
 
+    def test_banking_chatbot_description_generates_domain_files(self) -> None:
+        idea = """
+        Customer Chatbot / IVR for Banking Services
+
+        Build a banking customer support chatbot and IVR system for web chat,
+        mobile app, WhatsApp, and phone IVR. Customers can check account balance,
+        view recent transactions, block debit or credit cards, check loan EMI
+        details, track complaint status, find nearest branch or ATM, answer FAQs,
+        and transfer to a human agent. Balance enquiry asks for customer ID,
+        then OTP 123456, then returns the balance for CUST1001 as 45230.75.
+        """
+        with patch.dict(os.environ, {"OLLAMA_BASE_URL": ""}, clear=False):
+            response = self.client.post(
+                "/api/suggest",
+                json={"idea": idea, "generationMode": "fast"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        preview = response.json()
+        file_map = {item["path"]: item["content"] for item in preview.get("files", [])}
+        expected_paths = {
+            "backend/app/routers/chatbot.py",
+            "backend/app/routers/banking.py",
+            "backend/app/routers/health.py",
+            "backend/app/services/chatbot_service.py",
+            "backend/app/services/banking_service.py",
+            "backend/app/services/intent_service.py",
+            "backend/app/data/dummy_customers.json",
+            "frontend/src/pages/ChatbotPage.jsx",
+            "frontend/src/components/ChatWindow.jsx",
+            "frontend/src/components/MessageBubble.jsx",
+            "frontend/src/services/chatbotApi.js",
+        }
+        contract = preview.get("projectContract", {})
+
+        self.assertEqual(contract.get("project_type"), "banking_chatbot")
+        self.assertTrue(preview.get("validationStatus", {}).get("valid"), preview.get("validationStatus"))
+        self.assertTrue(expected_paths.issubset(file_map))
+        self.assertTrue(expected_paths.issubset(set(contract.get("required_files", []))))
+        module_names = {item.get("name") for item in preview.get("modules", [])}
+        self.assertIn("Chatbot Module", module_names)
+        self.assertIn("Banking Service Module", module_names)
+        self.assertIn("Intent Detection Module", module_names)
+        self.assertIn("Dummy Banking Database", module_names)
+        self.assertIn("Frontend Chat Interface", module_names)
+
+        self.assertIn('@router.post("/chat"', file_map["backend/app/routers/chatbot.py"])
+        for marker in ["balance", "transactions", "block-card", "loan", "complaint", "locations"]:
+            self.assertIn(marker, file_map["backend/app/routers/banking.py"])
+        self.assertIn("CUST1001", file_map["backend/app/data/dummy_customers.json"])
+        self.assertIn("123456", file_map["backend/app/data/dummy_customers.json"])
+        self.assertIn("45230.75", file_map["backend/app/data/dummy_customers.json"])
+        self.assertIn("chatbot", file_map["backend/app/main.py"])
+        self.assertIn("banking", file_map["backend/app/main.py"])
+        self.assertIn("ChatbotPage", file_map["frontend/src/App.jsx"])
+        self.assertIn("ChatWindow", file_map["frontend/src/pages/ChatbotPage.jsx"])
+        self.assertIn("sendChatMessage", file_map["frontend/src/components/ChatWindow.jsx"])
+        self.assertIn("/chat", file_map["frontend/src/services/chatbotApi.js"])
+
+        zip_response = self.client.post("/api/zip", json={"preview": preview})
+        self.assertEqual(zip_response.status_code, 200)
+        zip_path = Path("generated") / zip_response.json()["filename"]
+        with ZipFile(zip_path) as archive:
+            archive_paths = {
+                name.split("/", 1)[1]
+                for name in archive.namelist()
+                if "/" in name and not name.endswith("/")
+            }
+        self.assertEqual(archive_paths, set(file_map))
+        self.assertTrue(expected_paths.issubset(archive_paths))
+
+    def test_banking_chatbot_repair_restores_missing_domain_files(self) -> None:
+        idea = """
+        Customer banking chatbot IVR with account balance, recent transactions,
+        debit card blocking, loan EMI, complaint status, branch ATM search, and
+        OTP verification for CUST1001 using OTP 123456.
+        """
+        with patch.dict(os.environ, {"OLLAMA_BASE_URL": ""}, clear=False):
+            preview = asyncio.run(agent_controller.generate_files(idea, generation_mode="fast"))
+
+        removed_paths = {"backend/app/services/banking_service.py", "frontend/src/components/ChatWindow.jsx"}
+        incomplete_preview = dict(preview)
+        incomplete_preview["files"] = [
+            item for item in preview.get("files", []) if item.get("path") not in removed_paths
+        ]
+        repaired = agent_controller.validate_project(incomplete_preview)
+        file_map = {item["path"]: item["content"] for item in repaired.get("files", [])}
+
+        self.assertTrue(repaired.get("validationStatus", {}).get("valid"), repaired.get("validationStatus"))
+        self.assertIn("backend/app/services/banking_service.py", file_map)
+        self.assertIn("frontend/src/components/ChatWindow.jsx", file_map)
+        self.assertIn("dummy_customers.json", file_map["backend/app/services/banking_service.py"])
+        self.assertIn("sendChatMessage", file_map["frontend/src/components/ChatWindow.jsx"])
+
     def test_chat_static_ui_contract_for_popup_actions(self) -> None:
         template = Path("app/templates/index.html").read_text(encoding="utf-8")
         script = Path("app/static/app.js").read_text(encoding="utf-8")
@@ -1616,6 +1710,85 @@ class AgentControllerTests(unittest.TestCase):
         self.assertIn('event.key === "Escape"', script)
         self.assertIn(".chat-panel.is-open", styles)
         self.assertIn("transition: opacity", styles)
+        self.assertIn('class="chat-panel closed"', template)
+        self.assertIn('class="chat-toggle-button closed"', template)
+        self.assertIn('chatPanel.classList.add("open", "is-open")', script)
+        self.assertIn('chatToggleButton.classList.add("closed")', script)
+        self.assertIn("@keyframes chatPulse", styles)
+
+    def test_preview_includes_project_contract_and_validation_status(self) -> None:
+        response = self.client.post(
+            "/api/suggest",
+            json={
+                "idea": "Build a todo API",
+                "generationMode": "fast",
+                "selectedStack": {
+                    "language": "Python",
+                    "frontend": "None",
+                    "backend": "FastAPI",
+                    "database": "SQLite",
+                    "aiTools": "None",
+                    "deployment": "Render",
+                },
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        preview = response.json()
+        contract = preview.get("projectContract", {})
+        validation_status = preview.get("validationStatus", {})
+        file_paths = {item["path"] for item in preview.get("files", [])}
+
+        self.assertTrue(contract)
+        self.assertTrue(validation_status.get("valid"))
+        self.assertIn("backend/app/routers/health.py", contract["required_files"])
+        self.assertIn("backend/app/services/app_service.py", contract["required_files"])
+        self.assertTrue(set(contract["required_files"]).issubset(file_paths))
+
+    def test_chat_profile_and_service_file_requests_flow_into_contract(self) -> None:
+        chat_response = self.client.post(
+            "/api/agent/chat",
+            json={
+                "message": "Add profile page and service file",
+                "currentIdea": "Build a customer portal",
+                "currentPreview": {"projectName": "Customer Portal"},
+                "selectedStack": {
+                    "language": "Python",
+                    "frontend": "React",
+                    "backend": "FastAPI",
+                    "database": "SQLite",
+                },
+                "agentState": "preview_ready",
+                "llmMode": "free_rule_based",
+            },
+        )
+        self.assertEqual(chat_response.status_code, 200)
+        requested_files = chat_response.json()["requestedFiles"]
+        requested_paths = {item["path"] for item in requested_files}
+        self.assertIn("frontend/src/pages/ProfilePage.jsx", requested_paths)
+        self.assertIn("backend/app/services/app_service.py", requested_paths)
+
+        preview_response = self.client.post(
+            "/api/suggest",
+            json={
+                "idea": "Build a customer portal",
+                "generationMode": "fast",
+                "selectedStack": {
+                    "language": "Python",
+                    "frontend": "React",
+                    "backend": "FastAPI",
+                    "database": "SQLite",
+                    "aiTools": "None",
+                    "deployment": "Render",
+                },
+                "requestedFiles": requested_files,
+            },
+        )
+        self.assertEqual(preview_response.status_code, 200)
+        preview = preview_response.json()
+        file_paths = {item["path"] for item in preview.get("files", [])}
+        contract_required = set(preview["projectContract"]["required_files"])
+        self.assertTrue(requested_paths.issubset(file_paths))
+        self.assertTrue(requested_paths.issubset(contract_required))
 
 
 if __name__ == "__main__":

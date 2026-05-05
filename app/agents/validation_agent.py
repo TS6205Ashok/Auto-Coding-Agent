@@ -16,6 +16,7 @@ class ValidationAgent:
             selected_stack=context.selected_stack,
             project_kind=context.project_kind,
             template_family=context.template_family,
+            project_contract=context.project_contract.to_dict() if context.project_contract else context.preview.get("projectContract"),
         )
         logger.info(
             "ValidationAgent validated project template=%s findings=%s",
