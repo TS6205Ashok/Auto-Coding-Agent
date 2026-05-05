@@ -52,6 +52,9 @@ class FinalArchitectureDecision:
     install_commands: list[str] = field(default_factory=list)
     run_commands: list[str] = field(default_factory=list)
     package_requirements: list[str] = field(default_factory=list)
+    main_file: str = ""
+    main_run_target: str = ""
+    local_url: str = ""
     required_inputs: list[dict[str, Any]] = field(default_factory=list)
     docs_required: list[str] = field(default_factory=list)
     migration_summary: dict[str, Any] = field(default_factory=dict)
@@ -378,6 +381,9 @@ def build_final_architecture_decision(
         install_commands=list(entry.install_commands),
         run_commands=list(entry.run_commands),
         package_requirements=list(entry.package_requirements),
+        main_file=_main_file_for(entry.stack_family, language, frontend, backend),
+        main_run_target=_main_run_target_for(entry.stack_family, language, frontend, backend),
+        local_url=_local_url_for(entry.stack_family, frontend, backend),
         docs_required=sorted(set(docs_required)),
         migration_summary=dict(migration_summary or {}),
         backend_required=entry.backend_required,
@@ -546,3 +552,51 @@ def _with_react_files(required_files: list[str]) -> list[str]:
         ".vscode/launch.json",
         ".vscode/tasks.json",
     ]
+
+
+def _main_file_for(stack_family: str, language: str, frontend: str, backend: str) -> str:
+    if backend in {"FastAPI", "Flask"}:
+        return "backend/app/main.py"
+    if backend == "Spring Boot" or language == "Java":
+        return "backend/src/main/java/com/example/app/Application.java"
+    if backend == "Express":
+        return "backend/server.js"
+    if frontend == "React":
+        return "frontend/src/main.jsx"
+    if stack_family == "static_frontend" or frontend == "HTML/CSS/JavaScript":
+        return "index.html"
+    if language == "C++":
+        return "main.cpp"
+    return "README.md"
+
+
+def _main_run_target_for(stack_family: str, language: str, frontend: str, backend: str) -> str:
+    if stack_family == "static_frontend" or frontend == "HTML/CSS/JavaScript":
+        return "Open index.html in browser"
+    if backend == "FastAPI":
+        return "Click IDE Play button or run run.bat / run.sh"
+    if backend == "Flask":
+        return "Click IDE Play button or run run.bat / run.sh"
+    if backend == "Spring Boot" or language == "Java":
+        return "Click IDE Play button or run mvn spring-boot:run"
+    if backend == "Express":
+        return "VS Code Run Task or run npm run dev"
+    if frontend == "React":
+        return "VS Code Run Task or run npm run dev"
+    if language == "C++":
+        return "VS Code Run Task or run run.bat / run.sh"
+    return "Run run.bat / run.sh"
+
+
+def _local_url_for(stack_family: str, frontend: str, backend: str) -> str:
+    if backend == "FastAPI":
+        return "http://localhost:8000"
+    if backend == "Flask":
+        return "http://localhost:5000"
+    if backend == "Spring Boot":
+        return "http://localhost:8080"
+    if frontend == "React":
+        return "http://localhost:5173"
+    if stack_family == "static_frontend" or frontend == "HTML/CSS/JavaScript":
+        return "Open index.html directly"
+    return ""

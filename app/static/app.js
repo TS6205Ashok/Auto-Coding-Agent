@@ -53,6 +53,10 @@ const installCommandsList = document.getElementById("installCommandsList");
 const runCommandsList = document.getElementById("runCommandsList");
 const envVariablesList = document.getElementById("envVariablesList");
 const requiredInputsBody = document.getElementById("requiredInputsBody");
+const mainFileText = document.getElementById("mainFileText");
+const runMethodText = document.getElementById("runMethodText");
+const localUrlText = document.getElementById("localUrlText");
+const runtimeInputsSummaryText = document.getElementById("runtimeInputsSummaryText");
 const modulesList = document.getElementById("modulesList");
 const fileTreeBlock = document.getElementById("fileTreeBlock");
 const filesList = document.getElementById("filesList");
@@ -1067,6 +1071,10 @@ function resetAll() {
   fileTreeBlock.textContent = "";
   summaryText.textContent = "";
   problemStatementText.textContent = "";
+  mainFileText.textContent = "";
+  runMethodText.textContent = "";
+  localUrlText.textContent = "";
+  runtimeInputsSummaryText.textContent = "";
   projectNameHeading.textContent = "Generated Project";
   refreshUiState();
 }
@@ -1086,6 +1094,7 @@ function renderPreview(preview) {
   summaryText.textContent = preview.summary || "No summary available.";
   problemStatementText.textContent = preview.problemStatement || "No problem statement available.";
   fileTreeBlock.textContent = preview.fileTree || "No file tree available.";
+  renderRuntimeSummary(preview);
 
   renderList(detectedChoicesList, preview.detectedUserChoices, "No explicit user choices detected.");
   renderStackChips(preview.selectedStack || getDefaultStackState());
@@ -1102,7 +1111,17 @@ function renderPreview(preview) {
   renderRequiredInputs(preview.requiredInputs || []);
   renderEnvVariables(preview.envVariables || []);
   renderModules(preview.modules || []);
-  renderFiles(preview.files || []);
+  renderFiles(preview.files || [], preview.mainFile || "");
+}
+
+function renderRuntimeSummary(preview) {
+  const requiredInputs = Array.isArray(preview.requiredInputs) ? preview.requiredInputs : [];
+  mainFileText.textContent = preview.mainFile || "No main file detected.";
+  runMethodText.textContent = preview.mainRunTarget || preview.primaryRunCommand || "No run method detected.";
+  localUrlText.textContent = preview.localUrl || "Not applicable.";
+  runtimeInputsSummaryText.textContent = requiredInputs.length
+    ? `${requiredInputs.length} runtime input${requiredInputs.length === 1 ? "" : "s"} required before or during startup.`
+    : "No required runtime inputs are needed for this project.";
 }
 
 function renderToolRecommendations(preview) {
@@ -1229,7 +1248,7 @@ function renderRequiredInputs(requiredInputs) {
   if (!Array.isArray(requiredInputs) || requiredInputs.length === 0) {
     const row = document.createElement("tr");
     row.innerHTML = `
-      <td colspan="5">No required inputs detected. Copy <code>.env.example</code> to <code>.env</code> if you want to override defaults later.</td>
+      <td colspan="5">No required runtime inputs are needed for this project.</td>
     `;
     requiredInputsBody.appendChild(row);
     return;
@@ -1241,7 +1260,7 @@ function renderRequiredInputs(requiredInputs) {
       <td><code>${escapeHtml(item.name || "")}</code></td>
       <td>${item.required === false ? "Optional" : "Required"}</td>
       <td><code>${escapeHtml(item.example || "") || "-"}</code></td>
-      <td>${escapeHtml(item.whereToAdd || ".env")}</td>
+      <td>${escapeHtml(item.whereToEnter || item.whereToAdd || ".env")}</td>
       <td>${escapeHtml(item.purpose || "No purpose provided.")}</td>
     `;
     requiredInputsBody.appendChild(row);
@@ -1280,7 +1299,7 @@ function renderModules(modules) {
   });
 }
 
-function renderFiles(files) {
+function renderFiles(files, mainFile = "") {
   filesList.replaceChildren();
   if (!Array.isArray(files) || files.length === 0) {
     const empty = document.createElement("p");
@@ -1295,12 +1314,13 @@ function renderFiles(files) {
     entry.className = "file-entry";
 
     const summary = document.createElement("summary");
+    const isEntryPoint = mainFile && file.path === mainFile;
     summary.innerHTML = `
       <span class="file-entry-header">
         <span class="file-entry-dots"><span></span><span></span><span></span></span>
         <span class="file-entry-path">${escapeHtml(file.path || "Unnamed file")}</span>
       </span>
-      <span class="file-entry-tag">Source</span>
+      <span class="file-entry-tag">${isEntryPoint ? "ENTRY POINT" : "Source"}</span>
     `;
 
     const code = document.createElement("pre");

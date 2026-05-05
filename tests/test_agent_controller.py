@@ -1198,6 +1198,111 @@ class AgentControllerTests(unittest.TestCase):
                     self.assertIn("Run Project", task_labels)
                     self.assertIn("Project Agent Generated Starter v1", file_map[".vscode/tasks.json"])
 
+    def test_runtime_preview_metadata_and_required_inputs_are_visible(self) -> None:
+        with patch.dict(os.environ, {"OLLAMA_BASE_URL": ""}, clear=False):
+            preview = asyncio.run(
+                agent_controller.generate_files(
+                    "Build chatbot app",
+                    generation_mode="fast",
+                )
+            )
+
+        file_map = {item["path"]: item["content"] for item in preview.get("files", [])}
+        input_names = {item["name"] for item in preview.get("requiredInputs", [])}
+
+        self.assertEqual(preview["mainFile"], "backend/app/main.py")
+        self.assertTrue(preview["mainRunTarget"])
+        self.assertEqual(preview["localUrl"], "http://localhost:8000")
+        self.assertIn("OPENAI_API_KEY", input_names)
+        self.assertTrue(all("whereToEnter" in item for item in preview.get("requiredInputs", [])))
+        self.assertIn("OPENAI_API_KEY", file_map[".env.example"])
+        self.assertIn("OPENAI_API_KEY", file_map["REQUIRED_INPUTS.md"])
+        self.assertIn("OPENAI_API_KEY", file_map["FULL_RUNTIME_INSTRUCTIONS.md"])
+        self.assertIn('self.openai_api_key = get_env("OPENAI_API_KEY"', file_map["backend/app/config.py"])
+
+    def test_email_and_payment_inputs_are_detected(self) -> None:
+        cases = [
+            (
+                "Build contact form that sends email notifications",
+                {"SMTP_EMAIL", "SMTP_PASSWORD", "SMTP_HOST", "SMTP_PORT"},
+            ),
+            (
+                "Build payment checkout app with Stripe subscription",
+                {"STRIPE_SECRET_KEY", "STRIPE_PUBLIC_KEY", "PAYMENT_WEBHOOK_SECRET"},
+            ),
+        ]
+
+        with patch.dict(os.environ, {"OLLAMA_BASE_URL": ""}, clear=False):
+            for prompt, expected_inputs in cases:
+                with self.subTest(prompt=prompt):
+                    preview = asyncio.run(
+                        agent_controller.generate_files(
+                            prompt,
+                            generation_mode="fast",
+                        )
+                    )
+                    file_map = {item["path"]: item["content"] for item in preview.get("files", [])}
+                    input_names = {item["name"] for item in preview.get("requiredInputs", [])}
+                    self.assertTrue(expected_inputs.issubset(input_names))
+                    for input_name in expected_inputs:
+                        self.assertIn(input_name, file_map[".env.example"])
+                        self.assertIn(input_name, file_map["REQUIRED_INPUTS.md"])
+
+    def test_no_required_inputs_and_preview_order_text(self) -> None:
+        with patch.dict(os.environ, {"OLLAMA_BASE_URL": ""}, clear=False):
+            preview = asyncio.run(
+                agent_controller.generate_files(
+                    "create sudoku web",
+                    generation_mode="fast",
+                )
+            )
+
+        self.assertEqual(preview["mainFile"], "index.html")
+        self.assertEqual(preview["mainRunTarget"], "Open index.html in browser")
+        self.assertEqual(preview["requiredInputs"], [])
+
+        template = Path("app/templates/index.html").read_text(encoding="utf-8")
+        self.assertLess(template.index("Main File To Run"), template.index("Generated Files"))
+        self.assertLess(template.index("Run Method"), template.index("Generated Files"))
+        self.assertLess(template.index("Required Runtime Inputs"), template.index("Generated Files"))
+
+    def test_validate_repairs_missing_runtime_metadata_and_placeholder_code(self) -> None:
+        incomplete_preview = {
+            "projectName": "Task Tracker",
+            "problemStatement": "Build a task tracker app",
+            "summary": "Starter summary",
+            "selectedStack": {
+                "language": "Python",
+                "frontend": "None",
+                "backend": "FastAPI",
+                "database": "SQLite",
+                "aiTools": "None",
+                "deployment": "Render",
+            },
+            "files": [
+                {"path": "backend/app/main.py", "content": "TODO"},
+                {"path": "run.bat", "content": "echo TODO"},
+            ],
+            "requiredInputs": [],
+            "envVariables": [],
+            "modules": [],
+            "assumptions": [],
+            "architecture": [],
+            "packageRequirements": [],
+            "installCommands": [],
+            "runCommands": [],
+            "detectedUserChoices": [],
+            "chosenStack": [],
+        }
+
+        repaired = agent_controller.validate_project(incomplete_preview)
+        file_map = {item["path"]: item["content"] for item in repaired.get("files", [])}
+
+        self.assertEqual(repaired["mainFile"], "backend/app/main.py")
+        self.assertTrue(repaired["mainRunTarget"])
+        self.assertIn("app = FastAPI", file_map["backend/app/main.py"])
+        self.assertIn("backend", file_map["run.bat"].lower())
+
 
 if __name__ == "__main__":
     unittest.main()

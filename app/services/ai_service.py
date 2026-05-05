@@ -16,7 +16,9 @@ from .file_service import (
     assemble_complete_preview_files,
     build_preview_file_tree,
     finalize_preview_files,
+    local_url_for_stack,
     main_file_for_stack,
+    main_run_target_for_stack,
     primary_run_command,
     required_preview_paths as _required_preview_paths,
 )
@@ -1475,6 +1477,17 @@ def normalize_preview(
         + architecture_defaults
     )
     chosen_stack = build_chosen_stack(selected_stack)
+    main_file = str(raw.get("mainFile") or main_file_for_stack(selected_stack)).strip()
+    primary_run = str(raw.get("primaryRunCommand") or primary_run_command(selected_stack, run_commands)).strip()
+    main_run_target = str(raw.get("mainRunTarget") or main_run_target_for_stack(selected_stack)).strip()
+    local_url = str(raw.get("localUrl") or local_url_for_stack(selected_stack)).strip()
+    setup_instructions = normalize_string_list(raw.get("setupInstructions")) or install_commands or ["setup.bat", "./setup.sh"]
+    run_instructions = normalize_string_list(raw.get("runInstructions")) or [
+        main_run_target,
+        primary_run,
+        "run.bat",
+        "./run.sh",
+    ]
 
     preview_payload = {
         "projectName": project_name,
@@ -1490,8 +1503,14 @@ def normalize_preview(
         "packageRequirements": package_requirements,
         "installCommands": install_commands,
         "runCommands": run_commands,
+        "setupInstructions": setup_instructions,
+        "runInstructions": dedupe_list(run_instructions),
         "requiredInputs": required_inputs,
         "envVariables": env_variables,
+        "mainFile": main_file,
+        "primaryRunCommand": primary_run,
+        "mainRunTarget": main_run_target,
+        "localUrl": local_url,
         "files": validated_files,
     }
     for passthrough_key in (
@@ -1503,8 +1522,6 @@ def normalize_preview(
         "stackAnalysis",
         "finalArchitecture",
         "generatedVersion",
-        "mainFile",
-        "primaryRunCommand",
         "stackSelectionSource",
         "isUserConfirmedStack",
     ):
@@ -2018,36 +2035,50 @@ def build_required_inputs(
     lowered = " ".join(part.lower() for part in context_parts if part)
 
     required_inputs: list[dict[str, Any]] = []
-    if project_kind["hasBackend"]:
+
+    def add_runtime_input(
+        name: str,
+        *,
+        required: bool,
+        example: str,
+        where: str = "Terminal prompt or .env",
+        purpose: str,
+    ) -> None:
         required_inputs.append(
             {
-                "name": "APP_ENV",
-                "required": False,
-                "example": "development",
+                "name": name,
+                "required": required,
+                "example": example,
                 "whereToAdd": ".env",
-                "purpose": "Application environment name.",
+                "whereToEnter": where,
+                "purpose": purpose,
             }
         )
-        required_inputs.append(
-            {
-                "name": "PORT",
-                "required": False,
-                "example": "8000",
-                "whereToAdd": ".env",
-                "purpose": "Local port used when the backend starts from the generated run scripts.",
-            }
+
+    if project_kind["hasBackend"]:
+        add_runtime_input(
+            "APP_ENV",
+            required=False,
+            example="development",
+            where=".env",
+            purpose="Application environment name.",
+        )
+        add_runtime_input(
+            "PORT",
+            required=False,
+            example="8000",
+            where=".env",
+            purpose="Local port used when the backend starts from the generated run scripts.",
         )
 
     database = selected_stack.get("database")
     if database == "SQLite":
-        required_inputs.append(
-            {
-                "name": "DATABASE_URL",
-                "required": True,
-                "example": "sqlite:///./app.db",
-                "whereToAdd": ".env",
-                "purpose": "SQLite connection string for local development.",
-            }
+        add_runtime_input(
+            "DATABASE_URL",
+            required=True,
+            example="sqlite:///./app.db",
+            where="Terminal prompt or .env",
+            purpose="SQLite connection string for local development.",
         )
     elif database in {"PostgreSQL", "MySQL"}:
         example = (
@@ -2055,35 +2086,38 @@ def build_required_inputs(
             if database == "PostgreSQL"
             else "mysql://root:password@localhost:3306/app_db"
         )
-        required_inputs.append(
-            {
-                "name": "DATABASE_URL",
-                "required": True,
-                "example": example,
-                "whereToAdd": ".env",
-                "purpose": f"{database} connection string for the backend database.",
-            }
+        add_runtime_input(
+            "DATABASE_URL",
+            required=True,
+            example=example,
+            where="Terminal prompt or .env",
+            purpose=f"{database} connection string for the backend database.",
         )
     elif database == "MongoDB":
-        required_inputs.append(
-            {
-                "name": "MONGODB_URI",
-                "required": True,
-                "example": "mongodb://localhost:27017/app_db",
-                "whereToAdd": ".env",
-                "purpose": "MongoDB connection string for the backend database.",
-            }
+        add_runtime_input(
+            "MONGODB_URI",
+            required=True,
+            example="mongodb://localhost:27017/app_db",
+            where="Terminal prompt or .env",
+            purpose="MongoDB connection string for the backend database.",
+        )
+
+    if project_kind["hasBackend"] and _context_mentions_any(lowered, ("database", "login", "auth", "authentication", "admin", "inventory")):
+        add_runtime_input(
+            "DATABASE_URL",
+            required=True,
+            example="sqlite:///./app.db",
+            where="Terminal prompt or .env",
+            purpose="Database connection string for local data storage.",
         )
 
     if _context_mentions_any(lowered, ("auth", "authentication", "login", "signup", "jwt", "token", "session")):
-        required_inputs.append(
-            {
-                "name": "JWT_SECRET",
-                "required": True,
-                "example": "change-me-super-secret",
-                "whereToAdd": ".env",
-                "purpose": "Secret used to sign authentication tokens.",
-            }
+        add_runtime_input(
+            "JWT_SECRET",
+            required=True,
+            example="change-me-super-secret",
+            where="Terminal prompt or .env",
+            purpose="Secret used to sign authentication tokens.",
         )
 
     if _context_mentions_any(lowered, ("email", "smtp", "mail", "newsletter", "verification email", "contact form")):
@@ -2094,6 +2128,7 @@ def build_required_inputs(
                     "required": True,
                     "example": "smtp.gmail.com",
                     "whereToAdd": ".env",
+                    "whereToEnter": "Terminal prompt or .env",
                     "purpose": "SMTP email server host.",
                 },
                 {
@@ -2101,35 +2136,49 @@ def build_required_inputs(
                     "required": True,
                     "example": "587",
                     "whereToAdd": ".env",
+                    "whereToEnter": "Terminal prompt or .env",
                     "purpose": "SMTP email server port.",
                 },
                 {
-                    "name": "SMTP_USER",
+                    "name": "SMTP_EMAIL",
                     "required": True,
-                    "example": "notifications@example.com",
+                    "example": "yourmail@gmail.com",
                     "whereToAdd": ".env",
-                    "purpose": "SMTP account username or sender login.",
+                    "whereToEnter": "Terminal prompt or .env",
+                    "purpose": "SMTP email address used for sending emails.",
                 },
                 {
                     "name": "SMTP_PASSWORD",
                     "required": True,
                     "example": "app-password",
                     "whereToAdd": ".env",
+                    "whereToEnter": "Terminal prompt or .env",
                     "purpose": "SMTP account password or app password.",
                 },
             ]
         )
 
     if _context_mentions_any(lowered, ("payment", "payments", "stripe", "checkout", "billing", "subscription")):
-        key_name = "STRIPE_SECRET_KEY" if "stripe" in lowered else "PAYMENT_SECRET_KEY"
-        required_inputs.append(
-            {
-                "name": key_name,
-                "required": True,
-                "example": "sk_test_1234567890",
-                "whereToAdd": ".env",
-                "purpose": "Secret key for payment provider API requests.",
-            }
+        add_runtime_input(
+            "STRIPE_SECRET_KEY",
+            required=True,
+            example="sk_test_1234567890",
+            where="Terminal prompt or .env",
+            purpose="Secret key for payment provider API requests.",
+        )
+        add_runtime_input(
+            "STRIPE_PUBLIC_KEY",
+            required=True,
+            example="pk_test_1234567890",
+            where=".env",
+            purpose="Public key used by the frontend checkout flow.",
+        )
+        add_runtime_input(
+            "PAYMENT_WEBHOOK_SECRET",
+            required=True,
+            example="whsec_1234567890",
+            where=".env",
+            purpose="Verifies payment webhook events.",
         )
 
     ai_tools = selected_stack.get("aiTools")
@@ -2141,6 +2190,7 @@ def build_required_inputs(
                     "required": True,
                     "example": "http://localhost:11434",
                     "whereToAdd": ".env",
+                    "whereToEnter": "Terminal prompt or .env",
                     "purpose": "Base URL for the local Ollama server.",
                 },
                 {
@@ -2148,19 +2198,18 @@ def build_required_inputs(
                     "required": True,
                     "example": "qwen2.5-coder:latest",
                     "whereToAdd": ".env",
+                    "whereToEnter": "Terminal prompt or .env",
                     "purpose": "Ollama model name to use for local inference.",
                 },
             ]
         )
-    if ai_tools == "OpenAI API" or _context_mentions_any(lowered, ("openai", "gpt-4", "gpt", "chatgpt")):
-        required_inputs.append(
-            {
-                "name": "OPENAI_API_KEY",
-                "required": True,
-                "example": "sk-proj-1234567890",
-                "whereToAdd": ".env",
-                "purpose": "API key for hosted OpenAI requests.",
-            }
+    if ai_tools == "OpenAI API" or _context_mentions_any(lowered, ("openai", "gpt-4", "gpt", "chatgpt", "chatbot", "ai assistant", "llm")):
+        add_runtime_input(
+            "OPENAI_API_KEY",
+            required=True,
+            example="sk-...",
+            where="Terminal prompt or .env",
+            purpose="Used for AI chatbot responses.",
         )
 
     if _context_mentions_any(lowered, ("oauth", "google login", "github login", "social login", "openid")):
@@ -2171,6 +2220,7 @@ def build_required_inputs(
                     "required": True,
                     "example": "your-client-id",
                     "whereToAdd": ".env",
+                    "whereToEnter": "Terminal prompt or .env",
                     "purpose": "OAuth client identifier for external sign-in.",
                 },
                 {
@@ -2178,9 +2228,19 @@ def build_required_inputs(
                     "required": True,
                     "example": "your-client-secret",
                     "whereToAdd": ".env",
+                    "whereToEnter": "Terminal prompt or .env",
                     "purpose": "OAuth client secret for external sign-in.",
                 },
             ]
+        )
+
+    if _context_mentions_any(lowered, ("file upload", "upload file", "cloud storage", "storage bucket", "s3", "gcs", "blob storage")):
+        add_runtime_input(
+            "STORAGE_BUCKET",
+            required=True,
+            example="project-agent-uploads",
+            where="Terminal prompt or .env",
+            purpose="Storage bucket used for uploaded files.",
         )
 
     if project_kind["isFullStack"]:
@@ -2190,6 +2250,7 @@ def build_required_inputs(
                 "required": False,
                 "example": "http://localhost:8000",
                 "whereToAdd": ".env",
+                "whereToEnter": ".env",
                 "purpose": "Frontend base URL for backend API calls.",
             }
         )
@@ -3326,6 +3387,7 @@ def normalize_required_inputs(value: Any) -> list[dict[str, Any]]:
                 "required": _coerce_required_flag(required_flag),
                 "example": str(item.get("example") or item.get("value") or "").strip(),
                 "whereToAdd": str(item.get("whereToAdd") or ".env").strip() or ".env",
+                "whereToEnter": str(item.get("whereToEnter") or item.get("whereToAdd") or ".env").strip() or ".env",
                 "purpose": str(item.get("purpose") or item.get("description") or "").strip(),
             }
         )
@@ -3347,6 +3409,7 @@ def merge_required_inputs(
                 "required": _coerce_required_flag(item.get("required", True)),
                 "example": str(item.get("example") or "").strip(),
                 "whereToAdd": str(item.get("whereToAdd") or ".env").strip() or ".env",
+                "whereToEnter": str(item.get("whereToEnter") or item.get("whereToAdd") or ".env").strip() or ".env",
                 "purpose": str(item.get("purpose") or "").strip(),
             }
     return list(merged.values())
@@ -3489,6 +3552,7 @@ def dedupe_required_inputs(items: Sequence[Mapping[str, Any]]) -> list[dict[str,
                 "required": _coerce_required_flag(item.get("required", True)),
                 "example": str(item.get("example") or "").strip(),
                 "whereToAdd": str(item.get("whereToAdd") or ".env").strip() or ".env",
+                "whereToEnter": str(item.get("whereToEnter") or item.get("whereToAdd") or ".env").strip() or ".env",
                 "purpose": str(item.get("purpose") or "").strip(),
             }
         )

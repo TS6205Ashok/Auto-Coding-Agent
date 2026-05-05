@@ -23,6 +23,16 @@ SYSTEM_FILENAMES = {
 }
 
 GENERATED_VERSION_LABEL = "Project Agent Generated Starter v1"
+NO_REQUIRED_RUNTIME_INPUTS_TEXT = "No required runtime inputs are needed for this project."
+SOURCE_EXTENSIONS = {".py", ".js", ".jsx", ".ts", ".tsx", ".java", ".cpp", ".html", ".css"}
+PLACEHOLDER_MARKERS = (
+    "todo",
+    "placeholder",
+    "add your code here",
+    "implement later",
+    "sample only",
+    "not implemented",
+)
 
 
 def slugify(value: str, fallback: str = "project-agent-output") -> str:
@@ -121,6 +131,8 @@ def build_required_docs(
     primary_run_command = str(
         preview.get("primaryRunCommand") or _primary_run_command(selected_stack, run_commands)
     ).strip()
+    main_run_target = str(preview.get("mainRunTarget") or _main_run_target_for_stack(selected_stack)).strip()
+    local_url = str(preview.get("localUrl") or _local_url_for_stack(selected_stack)).strip()
     recommended_ide = str(preview.get("recommendedIde") or "").strip()
     alternative_ide = str(preview.get("alternativeIde") or "").strip()
     runtime_tools = _listify(preview.get("runtimeTools"))
@@ -197,6 +209,8 @@ def build_required_docs(
             "## How To Run",
             f"- Main file: `{main_file}`",
             f"- Primary run command: `{primary_run_command}`",
+            f"- Run method: `{main_run_target}`",
+            f"- Local URL: `{local_url or 'Not applicable'}`",
             _bullet_text(run_commands, "No run commands were provided."),
             "",
             "## Required Inputs",
@@ -336,7 +350,7 @@ def build_required_docs(
             "",
             "Fill these values in `.env` before running the project.",
             "",
-            "| Name | Required | Example | Where To Add | Purpose |",
+            "| Name | Required | Example | Where To Enter | Purpose |",
             "|---|---|---|---|---|",
             _required_inputs_table(required_inputs),
         ]
@@ -472,6 +486,7 @@ def _required_input_list(value: Any) -> list[dict[str, Any]]:
                 "required": bool(item.get("required", True)),
                 "example": str(item.get("example") or item.get("value") or "").strip(),
                 "whereToAdd": str(item.get("whereToAdd") or ".env").strip() or ".env",
+                "whereToEnter": str(item.get("whereToEnter") or item.get("whereToAdd") or ".env").strip() or ".env",
                 "purpose": str(item.get("purpose") or item.get("description") or "").strip(),
             }
         )
@@ -545,6 +560,49 @@ def main_file_for_stack(selected_stack: Mapping[str, Any]) -> str:
     return _main_file_for_stack(selected_stack)
 
 
+def _main_run_target_for_stack(selected_stack: Mapping[str, Any]) -> str:
+    language = str(selected_stack.get("language") or "")
+    frontend = str(selected_stack.get("frontend") or "")
+    backend = str(selected_stack.get("backend") or "")
+    if frontend == "HTML/CSS/JavaScript" and backend in {"", "None", "Auto"}:
+        return "Open index.html in browser"
+    if backend in {"FastAPI", "Flask"}:
+        return "Click IDE Play button or run run.bat / run.sh"
+    if backend == "Spring Boot" or language == "Java":
+        return "Click IDE Play button or run mvn spring-boot:run"
+    if backend == "Express":
+        return "VS Code Run Task or run npm run dev"
+    if frontend == "React":
+        return "VS Code Run Task or run npm run dev"
+    if language == "C++":
+        return "VS Code Run Task or run run.bat / run.sh"
+    return "Run run.bat / run.sh"
+
+
+def main_run_target_for_stack(selected_stack: Mapping[str, Any]) -> str:
+    return _main_run_target_for_stack(selected_stack)
+
+
+def _local_url_for_stack(selected_stack: Mapping[str, Any]) -> str:
+    frontend = str(selected_stack.get("frontend") or "")
+    backend = str(selected_stack.get("backend") or "")
+    if backend == "FastAPI":
+        return "http://localhost:8000"
+    if backend == "Flask":
+        return "http://localhost:5000"
+    if backend == "Spring Boot":
+        return "http://localhost:8080"
+    if frontend == "React":
+        return "http://localhost:5173"
+    if frontend == "HTML/CSS/JavaScript":
+        return "Open index.html directly"
+    return ""
+
+
+def local_url_for_stack(selected_stack: Mapping[str, Any]) -> str:
+    return _local_url_for_stack(selected_stack)
+
+
 def _primary_run_command(
     selected_stack: Mapping[str, Any],
     run_commands: Sequence[str] | None = None,
@@ -606,7 +664,7 @@ def _required_inputs_to_env_list(required_inputs: list[dict[str, Any]]) -> list[
 
 def _required_inputs_summary(required_inputs: list[dict[str, Any]]) -> str:
     if not required_inputs:
-        return "- No required inputs were detected. `.env.example` is still included for future overrides."
+        return f"- {NO_REQUIRED_RUNTIME_INPUTS_TEXT}"
     return "\n".join(
         f"- `{item['name']}` ({'required' if item.get('required', True) else 'optional'}): {item.get('purpose') or 'No description provided.'}"
         for item in required_inputs
@@ -615,7 +673,7 @@ def _required_inputs_summary(required_inputs: list[dict[str, Any]]) -> str:
 
 def _required_inputs_table(required_inputs: list[dict[str, Any]]) -> str:
     if not required_inputs:
-        return "| None | No | n/a | `.env` | No required external values were detected for this starter. |"
+        return f"| None | No | n/a | n/a | {NO_REQUIRED_RUNTIME_INPUTS_TEXT} |"
 
     rows = []
     for item in required_inputs:
@@ -624,7 +682,7 @@ def _required_inputs_table(required_inputs: list[dict[str, Any]]) -> str:
                 name=item.get("name") or "",
                 required="Yes" if item.get("required", True) else "No",
                 example=(item.get("example") or "").replace("|", "\\|"),
-                where_to_add=(item.get("whereToAdd") or ".env").replace("|", "\\|"),
+                where_to_add=(item.get("whereToEnter") or item.get("whereToAdd") or ".env").replace("|", "\\|"),
                 purpose=(item.get("purpose") or "").replace("|", "\\|"),
             )
         )
@@ -762,11 +820,25 @@ def collect_preview_validation_findings(
         return [str(exc)]
 
     file_map = {entry["path"]: entry["content"] for entry in normalized_files}
+    findings.extend(
+        _runtime_metadata_findings(
+            preview,
+            file_map,
+            selected_stack,
+            project_kind,
+            template_family=template_family,
+        )
+    )
+
     for required_path in sorted(required_preview_paths(selected_stack, project_kind, template_family)):
         if required_path not in file_map:
             findings.append(f"Missing required file: {required_path}")
         elif not str(file_map[required_path]).strip():
             findings.append(f"Required file is empty: {required_path}")
+
+    for path, content in file_map.items():
+        if _is_source_file(path) and _is_placeholder_only_source(content):
+            findings.append(f"Source file contains placeholder-only code: {path}")
 
     for entry_path in _entry_validation_paths(selected_stack, project_kind, template_family=template_family):
         content = str(file_map.get(entry_path, ""))
@@ -799,6 +871,26 @@ def collect_preview_validation_findings(
     runtime_guide_text = str(file_map.get("FULL_RUNTIME_INSTRUCTIONS.md", ""))
     if runtime_guide_text and not _valid_full_runtime_instructions(runtime_guide_text):
         findings.append("FULL_RUNTIME_INSTRUCTIONS.md is missing required runtime guidance sections.")
+
+    required_inputs = _required_input_list(preview.get("requiredInputs"))
+    docs_blob = "\n".join(
+        str(file_map.get(path, ""))
+        for path in ["REQUIRED_INPUTS.md", ".env.example", "FULL_RUNTIME_INSTRUCTIONS.md", "README.md"]
+    )
+    for required_input in required_inputs:
+        input_name = str(required_input.get("name") or "").strip()
+        if not input_name:
+            continue
+        if input_name not in docs_blob:
+            findings.append(f"Required runtime input is missing from docs/env: {input_name}")
+    if required_inputs and (target_backend := str(selected_stack.get("backend") or "")) in {"FastAPI", "Flask"}:
+        config_text = str(file_map.get("backend/app/config.py", ""))
+        if "def get_env(" not in config_text:
+            findings.append("Python backend required input helper is missing.")
+        for required_input in required_inputs:
+            input_name = str(required_input.get("name") or "").strip()
+            if input_name and input_name not in config_text:
+                findings.append(f"Python backend config is missing required input helper usage: {input_name}")
 
     migration_summary = preview.get("migrationSummary") or {}
     if isinstance(migration_summary, Mapping) and migration_summary:
@@ -851,6 +943,92 @@ def collect_preview_validation_findings(
             findings.append("Frontend-only targets must not include backend files.")
 
     return findings
+
+
+def _runtime_metadata_findings(
+    preview: Mapping[str, Any],
+    file_map: Mapping[str, str],
+    selected_stack: Mapping[str, Any],
+    project_kind: Mapping[str, Any],
+    *,
+    template_family: str = "",
+) -> list[str]:
+    findings: list[str] = []
+    main_file = str(preview.get("mainFile") or "").strip()
+    main_run_target = str(preview.get("mainRunTarget") or "").strip()
+    if not main_file:
+        findings.append("Preview metadata is missing mainFile.")
+        main_file = _main_file_for_stack(selected_stack)
+    if not main_run_target:
+        findings.append("Preview metadata is missing mainRunTarget.")
+        main_run_target = _main_run_target_for_stack(selected_stack)
+    if main_file not in file_map:
+        findings.append(f"Main file does not exist in generated files: {main_file}")
+    elif not _valid_entry_file(main_file, str(file_map.get(main_file, ""))):
+        findings.append(f"Main file is not a runnable entry point: {main_file}")
+
+    root_run_bat = "\n".join(
+        str(file_map.get(path, ""))
+        for path in ["run.bat", "backend/run.bat", "frontend/run.bat"]
+    )
+    root_run_sh = "\n".join(
+        str(file_map.get(path, ""))
+        for path in ["run.sh", "backend/run.sh", "frontend/run.sh"]
+    )
+    if "run.bat" in main_run_target.lower() or "run.sh" in main_run_target.lower():
+        if "run.bat" not in file_map or "run.sh" not in file_map:
+            findings.append("Run method references run.bat/run.sh but root run scripts are missing.")
+        elif not _valid_run_scripts(root_run_bat, root_run_sh, selected_stack, project_kind, template_family=template_family):
+            findings.append("Run method references run.bat/run.sh but scripts do not match the selected stack.")
+
+    target_l = main_run_target.lower()
+    command_blob = "\n".join([main_run_target, *[str(item) for item in preview.get("runCommands", [])]]).lower()
+    if "npm run dev" in target_l or "npm run dev" in command_blob:
+        package_paths = _package_json_paths(selected_stack, project_kind, template_family=template_family)
+        if not any(path in file_map and _valid_package_json(file_map[path], {"dev"}) for path in package_paths):
+            findings.append("Run method references npm run dev but no package.json with a dev script exists.")
+    if "mvn spring-boot:run" in target_l or "mvn spring-boot:run" in command_blob:
+        if "backend/pom.xml" not in file_map:
+            findings.append("Run method references Maven but backend/pom.xml is missing.")
+    if "uvicorn" in target_l or "uvicorn" in command_blob:
+        requirements_text = str(file_map.get("backend/requirements.txt", ""))
+        main_text = str(file_map.get("backend/app/main.py", ""))
+        if "uvicorn" not in requirements_text.lower() or "app = FastAPI" not in main_text:
+            findings.append("Run method references Uvicorn but FastAPI dependency or app entrypoint is missing.")
+    if "open index.html" in target_l and "index.html" not in file_map:
+        findings.append("Run method references index.html but index.html is missing.")
+    if "click ide play button" in target_l and main_file in file_map and not _valid_entry_file(main_file, str(file_map.get(main_file, ""))):
+        findings.append("Run method references IDE Play button but main file has no runnable entry point.")
+    return findings
+
+
+def _valid_run_scripts(
+    run_bat: str,
+    run_sh: str,
+    selected_stack: Mapping[str, Any],
+    project_kind: Mapping[str, Any],
+    *,
+    template_family: str = "",
+) -> bool:
+    combined = f"{run_bat}\n{run_sh}".lower()
+    backend = str(selected_stack.get("backend") or "")
+    frontend = str(selected_stack.get("frontend") or "")
+    language = str(selected_stack.get("language") or "")
+    if template_family == "puzzle-game" or frontend == "HTML/CSS/JavaScript":
+        return "index.html" in combined or "http.server" in combined
+    if backend == "FastAPI":
+        return "backend" in combined and ("uvicorn" in combined or "app/main.py" in combined)
+    if backend == "Flask":
+        return "backend" in combined and "app/main.py" in combined
+    if backend == "Spring Boot" or language == "Java":
+        return "backend" in combined and "mvn spring-boot:run" in combined
+    if backend == "Express":
+        return "backend" in combined and ("npm start" in combined or "npm run dev" in combined)
+    if frontend == "React":
+        return "frontend" in combined and "npm run dev" in combined
+    if language == "C++":
+        return "g++" in combined or "main.cpp" in combined
+    return bool(combined.strip())
 
 
 def _tool_recommendation_text(
@@ -930,6 +1108,8 @@ def _build_full_runtime_instructions(
     generated_version = GENERATED_VERSION_LABEL
     main_file = _main_file_for_stack(selected_stack)
     primary_run_command = _primary_run_command(selected_stack, run_commands)
+    main_run_target = _main_run_target_for_stack(selected_stack)
+    local_url = _local_url_for_stack(selected_stack)
 
     sections = [
         "# Full Runtime Instructions",
@@ -971,12 +1151,18 @@ def _build_full_runtime_instructions(
         "## 6. REQUIRED INPUTS (API KEYS / CONFIG)",
         _required_inputs_summary(required_inputs),
         "",
+        "| Input Name | Required | Example | Where To Enter | Purpose |",
+        "|---|---|---|---|---|",
+        _required_inputs_table(required_inputs),
+        "",
         "## 7. HOW RUNTIME INPUT WORKS",
         runtime_input_text,
         "",
         "## 8. HOW TO RUN THE PROJECT",
         f"- Open main file: `{main_file}`",
+        f"- Run method: `{main_run_target}`",
         f"- Primary run command: `{primary_run_command}`",
+        f"- Local URL: `{local_url or 'Not applicable'}`",
         _run_instructions_text(selected_stack, run_commands),
         "",
         "## 9. EXPECTED OUTPUT",
@@ -1562,6 +1748,9 @@ def _repair_runtime_contract(
                 project_name,
             )
             merged[path] = replacement
+            continue
+        if _is_source_file(path) and _is_placeholder_only_source(str(content)):
+            merged[path] = standard_map.get(path) or _build_safe_fallback_content(path, project_name)
 
     for path, content in list(merged.items()):
         if not path.endswith(".py"):
@@ -3313,6 +3502,47 @@ def _expected_package_scripts(
     return {"dev"}
 
 
+def _is_source_file(path: str) -> bool:
+    suffix = Path(path).suffix.lower()
+    if suffix not in SOURCE_EXTENSIONS:
+        return False
+    if path.endswith(".vscode/tasks.json") or path.endswith(".vscode/launch.json"):
+        return False
+    return True
+
+
+def _is_placeholder_only_source(content: str) -> bool:
+    text = content.strip()
+    if not text:
+        return True
+    lowered = text.lower()
+    compact = re.sub(r"[\s#/*<>{}();:'\"`=-]+", " ", lowered).strip()
+    if any(marker in lowered for marker in PLACEHOLDER_MARKERS):
+        runnable_markers = (
+            "function ",
+            "def ",
+            "class ",
+            "const ",
+            "let ",
+            "var ",
+            "app = ",
+            "public static void main",
+            "int main",
+            "<html",
+            "import ",
+            "export default",
+        )
+        if not any(marker in lowered for marker in runnable_markers):
+            return True
+    explanation_only_markers = (
+        "this file should",
+        "replace this",
+        "write your",
+        "implementation goes here",
+    )
+    return len(compact.split()) <= 8 and any(marker in lowered for marker in (*PLACEHOLDER_MARKERS, *explanation_only_markers))
+
+
 def _entry_validation_paths(
     selected_stack: Mapping[str, Any],
     project_kind: Mapping[str, Any],
@@ -3417,6 +3647,8 @@ def _valid_entry_file(path: str, content: str) -> bool:
         )
     if lower.endswith("application.java"):
         return "@SpringBootApplication" in text and "SpringApplication.run" in text
+    if lower.endswith("main.cpp"):
+        return "int main" in text
     return True
 
 

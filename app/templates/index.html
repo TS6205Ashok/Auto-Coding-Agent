@@ -177,6 +177,26 @@
       <div id="stackChips" class="stack-chip-row"></div>
 
       <div class="preview-grid">
+        <article class="card">
+          <h3>Main File To Run</h3>
+          <p id="mainFileText" class="text-block"></p>
+        </article>
+
+        <article class="card">
+          <h3>Run Method</h3>
+          <p id="runMethodText" class="text-block"></p>
+        </article>
+
+        <article class="card">
+          <h3>Local URL</h3>
+          <p id="localUrlText" class="text-block"></p>
+        </article>
+
+        <article class="card wide">
+          <h3>Required Runtime Inputs</h3>
+          <p id="runtimeInputsSummaryText" class="text-block"></p>
+        </article>
+
         <article class="card wide">
           <h3>Summary</h3>
           <p id="summaryText" class="text-block"></p>
@@ -238,16 +258,16 @@
         </article>
 
         <article class="card wide">
-          <h3>Required Inputs</h3>
-          <p class="required-inputs-copy">Fill these values in <code>.env</code> before running the project.</p>
+          <h3>Required Runtime Inputs</h3>
+          <p class="required-inputs-copy">Fill these values where shown before or while running the project.</p>
           <div class="required-inputs-table-wrap">
             <table class="required-inputs-table">
               <thead>
                 <tr>
-                  <th>Name</th>
+                  <th>Input Name</th>
                   <th>Required</th>
                   <th>Example</th>
-                  <th>Where To Add</th>
+                  <th>Where To Enter</th>
                   <th>Purpose</th>
                 </tr>
               </thead>
