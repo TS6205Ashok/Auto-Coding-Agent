@@ -62,6 +62,14 @@ const fileTreeBlock = document.getElementById("fileTreeBlock");
 const filesList = document.getElementById("filesList");
 const downloadText = document.getElementById("downloadText");
 const downloadLink = document.getElementById("downloadLink");
+const chatPanel = document.getElementById("chatPanel");
+const chatToggleButton = document.getElementById("chatToggleButton");
+const chatCloseButton = document.getElementById("chatCloseButton");
+const chatMessagesElement = document.getElementById("chatMessages");
+const chatActionBar = document.getElementById("chatActionBar");
+const chatInput = document.getElementById("chatInput");
+const chatSendButton = document.getElementById("chatSendButton");
+const chatModeBadge = document.getElementById("chatModeBadge");
 
 const stackSelects = {
   language: document.getElementById("languageSelect"),
@@ -86,6 +94,20 @@ let isApplyingStackToControls = false;
 let currentQuestionIndex = 0;
 let currentQuestionDraft = "";
 let showingSuggestion = false;
+let chatMessages = [];
+let chatDraftIdea = "";
+let chatFinalRequirements = "";
+let chatPendingCorrections = [];
+let chatRequestedFiles = [];
+let chatFilesToRemove = [];
+let chatUpdatedStack = null;
+let chatMode = "idea_discussion";
+let chatLinkedPreviewId = "";
+let isAgentRunning = false;
+let pendingAgentUpdate = null;
+let isApplyingPendingAgentUpdate = false;
+let llmModeUsed = "free_rule_based";
+let lastChatAction = null;
 let agentActivityState = {
   understood: "pending",
   analyzed: "pending",
@@ -112,6 +134,15 @@ generateProjectButton.addEventListener("click", handleGenerateProject);
 regenerateButton.addEventListener("click", handleRegenerate);
 confirmButton.addEventListener("click", handleConfirmZip);
 clearButton.addEventListener("click", resetAll);
+chatToggleButton.addEventListener("click", toggleChatPanel);
+chatCloseButton.addEventListener("click", closeChatPanel);
+chatSendButton.addEventListener("click", sendChatMessage);
+chatInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    void sendChatMessage();
+  }
+});
 
 Object.entries(stackSelects).forEach(([key, select]) => {
   select.addEventListener("change", () => handleStackChange(key));
@@ -317,6 +348,7 @@ function renderAgentActivity() {
 }
 
 function setBusy(isBusy, message = "Working...") {
+  isAgentRunning = isBusy;
   suggestButton.disabled = isBusy;
   skipSuggestButton.disabled = isBusy;
   askQuestionsButton.disabled = isBusy;
@@ -647,6 +679,13 @@ async function handleConfirmZip() {
         isUserConfirmedStack: stackSelection.isUserConfirmedStack,
       };
     }
+    currentPreview = {
+      ...currentPreview,
+      customFiles: mergeRequestedFiles(currentPreview.customFiles || [], chatRequestedFiles),
+      requestedFiles: mergeRequestedFiles(currentPreview.requestedFiles || [], chatRequestedFiles),
+      filesToRemove: mergeFilesToRemove(currentPreview.filesToRemove || [], chatFilesToRemove),
+      chatPendingCorrections,
+    };
     const response = await fetch("/api/zip", {
       method: "POST",
       headers: {
@@ -677,6 +716,384 @@ async function handleConfirmZip() {
   } finally {
     clearBusyState();
   }
+}
+
+// Chat popup functionality
+function openChatPanel() {
+  chatPanel.hidden = false;
+  chatPanel.classList.add("is-open");
+  chatToggleButton.setAttribute("aria-expanded", "true");
+  renderChatMessages();
+  chatInput.focus();
+}
+
+function closeChatPanel() {
+  chatPanel.classList.remove("is-open");
+  chatPanel.hidden = true;
+  chatToggleButton.setAttribute("aria-expanded", "false");
+}
+
+function toggleChatPanel() {
+  if (chatPanel.classList.contains("is-open")) {
+    closeChatPanel();
+  } else {
+    openChatPanel();
+  }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  closeChatPanel();
+  renderChatMessages();
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      closeChatPanel();
+    }
+  });
+});
+
+async function sendChatMessage() {
+  await handleChatSend();
+}
+
+async function handleChatSend() {
+  const message = chatInput.value.trim();
+  if (!message) {
+    return;
+  }
+  chatInput.value = "";
+  appendChatMessage("user", message);
+  chatMode = resolveChatMode();
+
+  try {
+    chatSendButton.disabled = true;
+    const response = await requestChat(message);
+    lastChatAction = response;
+    llmModeUsed = response.llmModeUsed || "free_rule_based";
+    chatModeBadge.textContent = llmModeUsed === "ollama" ? "Ollama Mode" : "Free Rule Mode";
+    appendChatMessage("assistant", response.reply || "I understood that.");
+    renderChatActions(response);
+    if (response.action === "update_requirements" && !response.needsConfirmation) {
+      chatDraftIdea = response.updatedIdea || message;
+      chatFinalRequirements = response.updatedRequirements || response.updatedIdea || message;
+    }
+  } catch (error) {
+    appendChatMessage("assistant", error.message || "Chat is still available in Free Rule Mode, but this request failed.");
+  } finally {
+    chatSendButton.disabled = false;
+  }
+}
+
+async function requestChat(message) {
+  const response = await fetch("/api/agent/chat", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      message,
+      conversation: chatMessages.slice(-10),
+      currentIdea: baseIdea || ideaInput.value.trim(),
+      currentPreview: currentPreview || {},
+      selectedStack: getCurrentStackSelection(),
+      agentState: isAgentRunning ? "running" : currentPreview ? "preview_ready" : "idle",
+      pendingCorrections: chatPendingCorrections,
+      llmMode: "auto",
+    }),
+  });
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload.detail || "Could not send chat message.");
+  }
+  return payload;
+}
+
+function appendChatMessage(role, content) {
+  chatMessages.push({ role, content });
+  renderChatMessage();
+}
+
+function renderChatMessage() {
+  renderChatMessages();
+}
+
+function renderChatMessages() {
+  chatMessagesElement.replaceChildren();
+  if (!chatMessages.length) {
+    const empty = document.createElement("p");
+    empty.className = "chat-empty";
+    empty.textContent = "Ask me to improve an idea, add files, change stack, or regenerate your preview.";
+    chatMessagesElement.appendChild(empty);
+    return;
+  }
+  chatMessages.forEach((message) => {
+    const bubble = document.createElement("article");
+    bubble.className = `chat-message ${message.role === "user" ? "user" : "assistant"}`;
+    bubble.textContent = message.content;
+    chatMessagesElement.appendChild(bubble);
+  });
+  chatMessagesElement.scrollTop = chatMessagesElement.scrollHeight;
+}
+
+function renderChatActions(action) {
+  chatActionBar.replaceChildren();
+  chatActionBar.hidden = false;
+
+  if (!action || action.action === "none") {
+    chatActionBar.hidden = true;
+    return;
+  }
+
+  if (action.updatedIdea || action.updatedRequirements) {
+    addChatActionButton("Use as Project Description", () => applyChatIdea(action));
+  }
+  if (action.needsConfirmation) {
+    const confirmLabel = action.action === "change_stack"
+      ? "Change Stack"
+      : action.action === "generate_project"
+        ? "Generate Project"
+      : action.action === "remove_files" || action.action === "remove_feature"
+        ? "Apply Corrections"
+      : action.action === "add_files"
+        ? "Add To Current Project"
+        : "Apply Corrections";
+    addChatActionButton(confirmLabel, () => applyChatAction(action));
+    addChatActionButton("Cancel", cancelChatAction, "ghost-button");
+  }
+  if (!action.needsConfirmation && (action.shouldGenerate || action.action === "generate_project")) {
+    addChatActionButton("Generate Project", () => applyChatGenerate(action));
+  }
+  if (action.shouldRegenerate || action.action === "regenerate_project") {
+    addChatActionButton("Regenerate Project", () => regenerateFromChat(action));
+  }
+  if (!chatActionBar.children.length) {
+    chatActionBar.hidden = true;
+  }
+}
+
+function addChatActionButton(label, handler, className = "secondary-button") {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = className;
+  button.textContent = label;
+  button.addEventListener("click", () => {
+    void handler();
+  });
+  chatActionBar.appendChild(button);
+}
+
+function useChatAsProjectDescription(action) {
+  applyChatIdea(action);
+}
+
+function applyChatIdea(action) {
+  const nextIdea = action.updatedIdea || action.updatedRequirements || "";
+  const nextRequirements = action.updatedRequirements || nextIdea;
+  if (nextIdea) {
+    ideaInput.value = nextIdea;
+    baseIdea = nextIdea;
+  }
+  if (nextRequirements) {
+    finalRequirements = nextRequirements;
+    finalRequirementsText.textContent = nextRequirements;
+    finalizeCard.hidden = false;
+  }
+  chatDraftIdea = nextIdea;
+  chatFinalRequirements = nextRequirements;
+  setStatus("Chat description copied into the project idea. Generate when ready.", "success");
+  refreshUiState();
+}
+
+async function applyChatAction(action) {
+  if (!action) {
+    return;
+  }
+  if (action.shouldPauseAgent && isAgentRunning) {
+    pendingAgentUpdate = action;
+    chatPendingCorrections.push(action);
+    chatActionBar.hidden = true;
+    setStatus("Chat correction captured. I will apply it after the current preview is ready.", "success");
+    return;
+  }
+  if (action.action === "change_stack" && action.updatedStack) {
+    await applyChatStack(action);
+    return;
+  }
+  if (action.action === "generate_project" || action.shouldGenerate) {
+    await applyChatGenerate(action);
+    return;
+  }
+  if (action.action === "remove_files" || action.action === "remove_feature" || action.filesToRemove?.length) {
+    await applyChatRemoveFiles(action);
+    return;
+  }
+  if (action.action === "add_files" || action.action === "add_feature" || action.action === "update_required_inputs" || action.shouldRegenerate || action.updatedRequirements || action.requestedFiles?.length) {
+    await applyChatCorrections(action);
+    return;
+  }
+  mergeChatActionState(action);
+  setStatus("Chat corrections are staged. Generate or regenerate to apply them.", "success");
+  refreshUiState();
+}
+
+async function applyChatCorrections(action) {
+  mergeChatActionState(action);
+  chatActionBar.hidden = true;
+  if (currentPreview) {
+    await regenerateFromChat(action, { alreadyMerged: true });
+    return;
+  }
+  await generateFromChat(action, { alreadyMerged: true });
+}
+
+async function applyChatRemoveFiles(action) {
+  mergeChatActionState(action);
+  chatActionBar.hidden = true;
+  if (currentPreview) {
+    currentPreview = {
+      ...currentPreview,
+      files: removePreviewFiles(currentPreview.files || [], chatFilesToRemove),
+      customFiles: removeManifestFiles(currentPreview.customFiles || [], chatFilesToRemove),
+      requestedFiles: removeManifestFiles(currentPreview.requestedFiles || [], chatFilesToRemove),
+      filesToRemove: mergeFilesToRemove(currentPreview.filesToRemove || [], chatFilesToRemove),
+    };
+  }
+  await regenerateFromChat(action, { alreadyMerged: true });
+}
+
+async function applyChatGenerate(action) {
+  applyChatIdea(action);
+  await generateFromChat(action);
+}
+
+async function applyChatStack(action) {
+  mergeChatActionState(action);
+  applySelectedStackToControls(action.updatedStack, {
+    source: "chatbot_stack_change",
+    isUserConfirmedStack: true,
+    isDirty: true,
+    lastModifiedField: action.updatedStack.lastModifiedField || "backend",
+    lastModifiedAt: Date.now(),
+  });
+  chatActionBar.hidden = true;
+  if (action.shouldRegenerate && currentPreview) {
+    await regenerateFromChat(action, { alreadyMerged: true });
+    return;
+  }
+  setStatus("Chat stack change is staged. Generate or regenerate to apply it.", "success");
+  refreshUiState();
+}
+
+function mergeChatActionState(action) {
+  const nextIdea = action.updatedIdea || baseIdea || ideaInput.value.trim();
+  const nextRequirements = action.updatedRequirements || finalRequirements || nextIdea;
+  if (nextIdea) {
+    baseIdea = nextIdea;
+    ideaInput.value = nextIdea;
+  }
+  if (nextRequirements) {
+    finalRequirements = nextRequirements;
+  }
+  chatFinalRequirements = nextRequirements;
+  chatRequestedFiles = mergeRequestedFiles(chatRequestedFiles, action.requestedFiles || []);
+  chatFilesToRemove = mergeFilesToRemove(chatFilesToRemove, action.filesToRemove || []);
+  chatPendingCorrections.push(action);
+}
+
+function mergeRequestedFiles(existing, incoming) {
+  const merged = new Map();
+  [...(existing || []), ...(incoming || [])].forEach((item) => {
+    if (item && item.path) {
+      merged.set(item.path, item);
+    }
+  });
+  return [...merged.values()];
+}
+
+function mergeFilesToRemove(existing, incoming) {
+  const merged = new Map();
+  [...(existing || []), ...(incoming || [])].forEach((item) => {
+    const path = typeof item === "string" ? item : item?.path;
+    if (path) {
+      merged.set(path, typeof item === "string" ? { path } : item);
+    }
+  });
+  return [...merged.values()];
+}
+
+function removePreviewFiles(files, removals) {
+  const removed = new Set((removals || []).map((item) => typeof item === "string" ? item : item?.path).filter(Boolean));
+  return (files || []).filter((item) => !removed.has(item.path));
+}
+
+function removeManifestFiles(files, removals) {
+  const removed = new Set((removals || []).map((item) => typeof item === "string" ? item : item?.path).filter(Boolean));
+  return (files || []).filter((item) => !removed.has(item.path));
+}
+
+async function generateFromChat(action, options = {}) {
+  if (!options.alreadyMerged) {
+    mergeChatActionState(action);
+  }
+  if (!baseIdea) {
+    setStatus("Chat did not provide a project idea to generate.", "error");
+    return;
+  }
+  downloadSection.hidden = true;
+  setBusy(true, "Generating project from chat...");
+  try {
+    const payload = await requestPreview({
+      idea: baseIdea,
+      selectedStack: getCurrentStackSelection(),
+      finalRequirements: chatFinalRequirements || finalRequirements || baseIdea,
+      customFiles: chatRequestedFiles,
+      requestedFiles: chatRequestedFiles,
+      filesToRemove: chatFilesToRemove,
+      chatPendingCorrections,
+    });
+    currentPreview = payload;
+    renderPreview(payload);
+    setStatus("Project generated from chat description.", "success");
+  } catch (error) {
+    setStatus(error.message || "Could not generate from chat.", "error");
+  } finally {
+    clearBusyState();
+  }
+}
+
+async function regenerateFromChat(action, options = {}) {
+  if (!options.alreadyMerged) {
+    mergeChatActionState(action);
+  }
+  if (!baseIdea && currentPreview) {
+    baseIdea = currentPreview.problemStatement || currentPreview.summary || currentPreview.projectName || "";
+  }
+  downloadSection.hidden = true;
+  setBusy(true, "Regenerating project with chat corrections...");
+  try {
+    await generatePreviewFromCurrentState("Preview regenerated with chat corrections.");
+    pendingAgentUpdate = null;
+  } catch (error) {
+    setStatus(error.message || "Could not regenerate with chat corrections.", "error");
+  } finally {
+    clearBusyState();
+  }
+}
+
+function cancelChatAction() {
+  lastChatAction = null;
+  chatActionBar.hidden = true;
+  appendChatMessage("assistant", "Canceled. I did not change the project.");
+}
+
+function resolveChatMode() {
+  if (isAgentRunning) {
+    return "agent_interruption";
+  }
+  if (currentPreview) {
+    return "preview_modification";
+  }
+  return "idea_discussion";
 }
 
 async function requestAgentAnalysis(idea) {
@@ -713,6 +1130,8 @@ async function requestAgentFinalize(body) {
 
 async function requestPreview(body) {
   const stackSelection = body.selectedStack || getCurrentStackSelection();
+  const customFiles = mergeRequestedFiles(chatRequestedFiles, body.customFiles || []);
+  const filesToRemove = mergeFilesToRemove(chatFilesToRemove, body.filesToRemove || []);
   const response = await fetch("/api/suggest", {
     method: "POST",
     headers: {
@@ -722,6 +1141,10 @@ async function requestPreview(body) {
       generationMode: generationModeSelect.value || "fast",
       ...body,
       selectedStack: stackSelection,
+      customFiles,
+      requestedFiles: mergeRequestedFiles(chatRequestedFiles, body.requestedFiles || []),
+      filesToRemove,
+      chatPendingCorrections: body.chatPendingCorrections || chatPendingCorrections,
       stackSelectionSource: stackSelection.source || "",
       isUserConfirmedStack: Boolean(stackSelection.isUserConfirmedStack || stackSelection.isDirty),
     }),
@@ -994,6 +1417,10 @@ async function generatePreviewFromCurrentState(successMessage) {
     idea: baseIdea,
     selectedStack: stackSelection,
     finalRequirements,
+    customFiles: chatRequestedFiles,
+    requestedFiles: chatRequestedFiles,
+    filesToRemove: chatFilesToRemove,
+    chatPendingCorrections,
   });
   currentPreview = payload;
   renderPreview(payload);
@@ -1012,6 +1439,17 @@ async function generatePreviewFromCurrentState(successMessage) {
     ready: "done",
   });
   setStatus(successMessage, "success");
+  if (pendingAgentUpdate && !isApplyingPendingAgentUpdate) {
+    const update = pendingAgentUpdate;
+    pendingAgentUpdate = null;
+    isApplyingPendingAgentUpdate = true;
+    mergeChatActionState(update);
+    try {
+      return await generatePreviewFromCurrentState("Preview regenerated with pending chatbot correction.");
+    } finally {
+      isApplyingPendingAgentUpdate = false;
+    }
+  }
   return payload;
 }
 
@@ -1026,6 +1464,24 @@ function resetAll() {
   currentStackSelection = createCurrentStackSelection(getDefaultStackState(), {
     source: "initial_default",
   });
+  chatMessages = [];
+  chatDraftIdea = "";
+  chatFinalRequirements = "";
+  chatPendingCorrections = [];
+  chatRequestedFiles = [];
+  chatFilesToRemove = [];
+  chatUpdatedStack = null;
+  chatMode = "idea_discussion";
+  chatLinkedPreviewId = "";
+  pendingAgentUpdate = null;
+  isApplyingPendingAgentUpdate = false;
+  lastChatAction = null;
+  llmModeUsed = "free_rule_based";
+  chatModeBadge.textContent = "Free Rule Mode";
+  chatActionBar.hidden = true;
+  chatPanel.hidden = true;
+  chatPanel.classList.remove("is-open");
+  renderChatMessages();
   resetQuestionFlow();
   resetAgentActivity();
 

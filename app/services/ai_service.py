@@ -1434,7 +1434,13 @@ def normalize_preview(
                 + build_run_commands(selected_stack, project_kind)
             )
 
-    custom_manifest = normalize_custom_manifest(raw.get("customFiles"), selected_stack, project_kind)
+    removed_paths = normalize_removed_paths(raw.get("filesToRemove"))
+    protected_paths = _required_preview_paths(selected_stack, project_kind, template_family)
+    removable_paths = {path for path in removed_paths if path not in protected_paths}
+    custom_manifest = [
+        item for item in normalize_custom_manifest(raw.get("customFiles"), selected_stack, project_kind)
+        if item.get("path") not in removable_paths
+    ]
     validated_files = finalize_preview_files(
         project_name=project_name,
         selected_stack=selected_stack,
@@ -1442,8 +1448,12 @@ def normalize_preview(
         required_inputs=required_inputs,
         template_family=template_family,
         custom_manifest=custom_manifest,
-        raw_files=raw.get("files"),
+        raw_files=[
+            item for item in normalize_files(raw.get("files"))
+            if item.get("path") not in removable_paths
+        ],
     )
+    validated_files = [item for item in validated_files if item.get("path") not in removable_paths]
 
     summary = (
         str(raw.get("summary") or "").strip()
@@ -1511,6 +1521,10 @@ def normalize_preview(
         "primaryRunCommand": primary_run,
         "mainRunTarget": main_run_target,
         "localUrl": local_url,
+        "customFiles": custom_manifest,
+        "requestedFiles": custom_manifest,
+        "filesToRemove": [{"path": path} for path in removed_paths],
+        "chatPendingCorrections": list(raw.get("chatPendingCorrections") or []),
         "files": validated_files,
     }
     for passthrough_key in (
@@ -1532,11 +1546,11 @@ def normalize_preview(
         selected_stack=selected_stack,
         project_kind=project_kind,
     )
-    preview_payload["files"] = complete_files
+    preview_payload["files"] = [item for item in complete_files if item.get("path") not in removable_paths]
     if template_family:
         preview_payload["templateFamily"] = template_family
     preview_payload["fileTree"] = build_preview_file_tree(
-        complete_files,
+        preview_payload["files"],
         include_env_example=bool(env_variables),
     )
     return preview_payload
@@ -2362,6 +2376,19 @@ def normalize_custom_manifest(
                 }
             )
     return defaults[:MAX_CUSTOM_FILES]
+
+
+def normalize_removed_paths(value: Any) -> list[str]:
+    paths: list[str] = []
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for item in value:
+            if isinstance(item, Mapping):
+                path = clean_relative_path(item.get("path"))
+            else:
+                path = clean_relative_path(item)
+            if path:
+                paths.append(path)
+    return sorted(set(paths))
 
 
 def build_standard_files(

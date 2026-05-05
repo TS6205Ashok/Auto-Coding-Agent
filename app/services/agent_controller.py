@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from app.agents.architecture_agent import ArchitectureAgent
+from app.agents.chat_coordinator_agent import chat_coordinator_agent
 from app.agents.context import AgentWorkflowContext
 from app.agents.file_planning_agent import FilePlanningAgent
 from app.agents.orchestrator_agent import orchestrator_agent
@@ -279,6 +280,9 @@ class AgentController:
         stack_selection_source: str = "",
         is_user_confirmed_stack: bool = False,
         final_requirements: str = "",
+        custom_files: list[dict[str, Any]] | None = None,
+        files_to_remove: list[str] | None = None,
+        chat_pending_corrections: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         return await self.orchestrator.run(
             prompt,
@@ -287,6 +291,9 @@ class AgentController:
             stack_selection_source=stack_selection_source,
             is_user_confirmed_stack=is_user_confirmed_stack,
             final_requirements=final_requirements,
+            custom_files=custom_files,
+            files_to_remove=files_to_remove,
+            chat_pending_corrections=chat_pending_corrections,
         )
 
     async def generate_files(
@@ -297,6 +304,9 @@ class AgentController:
         stack_selection_source: str = "",
         is_user_confirmed_stack: bool = False,
         final_requirements: str = "",
+        custom_files: list[dict[str, Any]] | None = None,
+        files_to_remove: list[str] | None = None,
+        chat_pending_corrections: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         return await self.build_preview(
             idea,
@@ -305,6 +315,32 @@ class AgentController:
             stack_selection_source=stack_selection_source,
             is_user_confirmed_stack=is_user_confirmed_stack,
             final_requirements=final_requirements,
+            custom_files=custom_files,
+            files_to_remove=files_to_remove,
+            chat_pending_corrections=chat_pending_corrections,
+        )
+
+    async def chat(
+        self,
+        *,
+        message: str,
+        conversation: list[dict[str, Any]] | None = None,
+        current_idea: str = "",
+        current_preview: Mapping[str, Any] | None = None,
+        selected_stack: Mapping[str, Any] | None = None,
+        agent_state: str = "idle",
+        pending_corrections: list[dict[str, Any]] | None = None,
+        llm_mode: str = "auto",
+    ) -> dict[str, Any]:
+        return await chat_coordinator_agent.run(
+            message=message,
+            conversation=conversation or [],
+            current_idea=current_idea,
+            current_preview=current_preview or {},
+            selected_stack=selected_stack or {},
+            agent_state=agent_state,
+            pending_corrections=pending_corrections or [],
+            llm_mode=llm_mode,
         )
 
     def validate_project(self, preview: dict[str, Any]) -> dict[str, Any]:

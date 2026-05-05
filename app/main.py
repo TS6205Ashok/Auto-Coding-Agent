@@ -54,7 +54,19 @@ class RequiredInputPayload(BaseModel):
     required: bool = True
     example: str = ""
     whereToAdd: str = ".env"
+    whereToEnter: str = ".env"
     purpose: str = ""
+
+
+class RequestedFilePayload(BaseModel):
+    path: str
+    purpose: str = ""
+    required: bool = True
+
+
+class FileRemovalPayload(BaseModel):
+    path: str
+    reason: str = ""
 
 
 class SuggestRequest(BaseModel):
@@ -64,6 +76,26 @@ class SuggestRequest(BaseModel):
     isUserConfirmedStack: bool = False
     generationMode: str = "fast"
     finalRequirements: str = ""
+    customFiles: list[RequestedFilePayload] = Field(default_factory=list)
+    requestedFiles: list[RequestedFilePayload] = Field(default_factory=list)
+    filesToRemove: list[FileRemovalPayload] = Field(default_factory=list)
+    chatPendingCorrections: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ChatMessagePayload(BaseModel):
+    role: str = "user"
+    content: str = ""
+
+
+class AgentChatRequest(BaseModel):
+    message: str = Field(..., min_length=1)
+    conversation: list[ChatMessagePayload] = Field(default_factory=list)
+    currentIdea: str = ""
+    currentPreview: dict[str, Any] = Field(default_factory=dict)
+    selectedStack: StackSelectionPayload = Field(default_factory=StackSelectionPayload)
+    agentState: str = "idle"
+    pendingCorrections: list[dict[str, Any]] = Field(default_factory=list)
+    llmMode: str = "auto"
 
 
 class AgentAnalyzeRequest(BaseModel):
@@ -127,6 +159,10 @@ class PreviewPayload(BaseModel):
     generatedVersion: str = ""
     mainFile: str = ""
     primaryRunCommand: str = ""
+    mainRunTarget: str = ""
+    localUrl: str = ""
+    runInstructions: list[str] = Field(default_factory=list)
+    setupInstructions: list[str] = Field(default_factory=list)
     stackSelectionSource: str = ""
     isUserConfirmedStack: bool = False
     chosenStack: list[str] = Field(default_factory=list)
@@ -142,6 +178,10 @@ class PreviewPayload(BaseModel):
     envVariables: list[EnvVariablePayload] = Field(default_factory=list)
     fileTree: str = ""
     files: list[FilePayload] = Field(default_factory=list)
+    customFiles: list[RequestedFilePayload] = Field(default_factory=list)
+    requestedFiles: list[RequestedFilePayload] = Field(default_factory=list)
+    filesToRemove: list[FileRemovalPayload] = Field(default_factory=list)
+    chatPendingCorrections: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ZipRequest(BaseModel):
@@ -171,6 +211,12 @@ async def suggest_project(payload: SuggestRequest) -> JSONResponse:
             stack_selection_source=payload.stackSelectionSource,
             is_user_confirmed_stack=payload.isUserConfirmedStack,
             final_requirements=payload.finalRequirements,
+            custom_files=[
+                item.model_dump()
+                for item in [*payload.customFiles, *payload.requestedFiles]
+            ],
+            files_to_remove=[item.path for item in payload.filesToRemove],
+            chat_pending_corrections=payload.chatPendingCorrections,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -199,6 +245,25 @@ async def finalize_agent(payload: AgentFinalizeRequest) -> JSONResponse:
         payload.suggestedStack.model_dump(),
     )
     return JSONResponse(finalized)
+
+
+@app.post("/api/agent/chat")
+async def chat_agent(payload: AgentChatRequest) -> JSONResponse:
+    message = payload.message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Please enter a chat message.")
+
+    result = await agent_controller.chat(
+        message=message,
+        conversation=[item.model_dump() for item in payload.conversation],
+        current_idea=payload.currentIdea,
+        current_preview=payload.currentPreview,
+        selected_stack=payload.selectedStack.model_dump(),
+        agent_state=payload.agentState,
+        pending_corrections=payload.pendingCorrections,
+        llm_mode=payload.llmMode,
+    )
+    return JSONResponse(result)
 
 
 @app.post("/api/zip")

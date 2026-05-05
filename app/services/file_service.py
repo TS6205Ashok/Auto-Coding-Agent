@@ -836,6 +836,11 @@ def collect_preview_validation_findings(
         elif not str(file_map[required_path]).strip():
             findings.append(f"Required file is empty: {required_path}")
 
+    protected_paths = required_preview_paths(selected_stack, project_kind, template_family)
+    for removed_path in _removed_preview_paths(preview.get("filesToRemove")):
+        if removed_path in file_map and removed_path not in protected_paths:
+            findings.append(f"Removed optional file still exists: {removed_path}")
+
     for path, content in file_map.items():
         if _is_source_file(path) and _is_placeholder_only_source(content):
             findings.append(f"Source file contains placeholder-only code: {path}")
@@ -943,6 +948,16 @@ def collect_preview_validation_findings(
             findings.append("Frontend-only targets must not include backend files.")
 
     return findings
+
+
+def _removed_preview_paths(value: Any) -> list[str]:
+    paths: list[str] = []
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for item in value:
+            path = _clean_relative_path(item.get("path") if isinstance(item, Mapping) else item)
+            if path:
+                paths.append(path)
+    return sorted(set(paths))
 
 
 def _runtime_metadata_findings(

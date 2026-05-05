@@ -123,11 +123,20 @@ class FilePlanningAgent:
             )
 
         context.custom_manifest = ai.normalize_custom_manifest(
-            raw.get("customFiles"),
+            raw.get("customFiles") or context.requested_custom_files or context.custom_manifest,
             context.selected_stack,
             context.project_kind,
         )
-        context.files = ai.normalize_files(raw.get("files"))
+        removed_paths = set(ai.normalize_removed_paths(raw.get("filesToRemove") or context.files_to_remove))
+        context.files_to_remove = sorted(removed_paths)
+        context.custom_manifest = [
+            item for item in context.custom_manifest
+            if item.get("path") not in removed_paths
+        ]
+        context.files = [
+            item for item in ai.normalize_files(raw.get("files"))
+            if item.get("path") not in removed_paths
+        ]
         context.architecture = ai.dedupe_list(
             ai.normalize_string_list(raw.get("architecture")) + context.architecture
         )

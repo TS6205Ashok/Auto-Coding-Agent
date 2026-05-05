@@ -1303,6 +1303,320 @@ class AgentControllerTests(unittest.TestCase):
         self.assertIn("app = FastAPI", file_map["backend/app/main.py"])
         self.assertIn("backend", file_map["run.bat"].lower())
 
+    def test_chat_falls_back_to_free_rule_mode_without_paid_api(self) -> None:
+        response = self.client.post(
+            "/api/agent/chat",
+            json={
+                "message": "I want to build a student attendance system",
+                "currentIdea": "",
+                "currentPreview": {},
+                "selectedStack": {},
+                "agentState": "idle",
+                "llmMode": "free_rule_based",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["llmModeUsed"], "free_rule_based")
+        self.assertEqual(payload["action"], "update_requirements")
+        self.assertIn("student attendance", payload["updatedRequirements"].lower())
+        self.assertFalse(payload["shouldGenerate"])
+
+    def test_chat_generate_this_returns_generate_project_action(self) -> None:
+        response = self.client.post(
+            "/api/agent/chat",
+            json={
+                "message": "Generate this",
+                "currentIdea": "Build a student management app",
+                "currentPreview": {},
+                "selectedStack": {},
+                "agentState": "idle",
+                "llmMode": "free_rule_based",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["action"], "generate_project")
+        self.assertTrue(payload["needsConfirmation"])
+        self.assertTrue(payload["shouldGenerate"])
+        self.assertIn("student management", payload["updatedRequirements"].lower())
+
+    def test_chat_preview_modification_returns_requested_files(self) -> None:
+        response = self.client.post(
+            "/api/agent/chat",
+            json={
+                "message": "Add admin dashboard and report page",
+                "currentIdea": "Build a customer portal",
+                "currentPreview": {"projectName": "Customer Portal", "selectedStack": {"frontend": "React", "backend": "FastAPI"}},
+                "selectedStack": {"language": "Python", "frontend": "React", "backend": "FastAPI", "database": "SQLite"},
+                "agentState": "preview_ready",
+                "llmMode": "free_rule_based",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        paths = {item["path"] for item in payload["requestedFiles"]}
+        self.assertTrue(payload["needsConfirmation"])
+        self.assertIn("frontend/src/pages/AdminDashboard.jsx", paths)
+        self.assertIn("frontend/src/pages/ReportPage.jsx", paths)
+
+    def test_chat_add_admin_dashboard_file_returns_add_files_action(self) -> None:
+        response = self.client.post(
+            "/api/agent/chat",
+            json={
+                "message": "Add admin dashboard file",
+                "currentIdea": "Build a customer portal",
+                "currentPreview": {"projectName": "Customer Portal"},
+                "selectedStack": {"language": "Python", "frontend": "React", "backend": "FastAPI", "database": "SQLite"},
+                "agentState": "preview_ready",
+                "llmMode": "free_rule_based",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["action"], "add_files")
+        self.assertTrue(payload["requestedFiles"])
+        self.assertTrue(payload["needsConfirmation"])
+        self.assertTrue(payload["shouldRegenerate"])
+        self.assertEqual(payload["requestedFiles"][0]["path"], "frontend/src/pages/AdminDashboard.jsx")
+
+    def test_chat_report_page_path_is_stack_correct_for_react(self) -> None:
+        response = self.client.post(
+            "/api/agent/chat",
+            json={
+                "message": "Add report page",
+                "currentIdea": "Build a customer portal",
+                "currentPreview": {"projectName": "Customer Portal"},
+                "selectedStack": {"language": "JavaScript", "frontend": "React", "backend": "None", "database": "None"},
+                "agentState": "preview_ready",
+                "llmMode": "free_rule_based",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        paths = {item["path"] for item in response.json()["requestedFiles"]}
+        self.assertIn("frontend/src/pages/ReportPage.jsx", paths)
+
+    def test_chat_reports_api_path_is_stack_correct_for_fastapi(self) -> None:
+        response = self.client.post(
+            "/api/agent/chat",
+            json={
+                "message": "Add reports API",
+                "currentIdea": "Build a reports API",
+                "currentPreview": {"projectName": "Reports API"},
+                "selectedStack": {"language": "Python", "frontend": "None", "backend": "FastAPI", "database": "SQLite"},
+                "agentState": "preview_ready",
+                "llmMode": "free_rule_based",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        paths = {item["path"] for item in response.json()["requestedFiles"]}
+        self.assertIn("backend/app/routers/reports.py", paths)
+
+    def test_chat_remove_report_page_returns_remove_files_action(self) -> None:
+        response = self.client.post(
+            "/api/agent/chat",
+            json={
+                "message": "Remove report page",
+                "currentIdea": "Build a customer portal",
+                "currentPreview": {
+                    "projectName": "Customer Portal",
+                    "files": [{"path": "frontend/src/pages/ReportPage.jsx", "content": "export default function ReportPage() { return null; }"}],
+                    "customFiles": [{"path": "frontend/src/pages/ReportPage.jsx", "purpose": "Reports page"}],
+                },
+                "selectedStack": {"language": "JavaScript", "frontend": "React", "backend": "None", "database": "None"},
+                "agentState": "preview_ready",
+                "llmMode": "free_rule_based",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["action"], "remove_files")
+        self.assertTrue(payload["needsConfirmation"])
+        self.assertTrue(payload["shouldRegenerate"])
+        self.assertIn("frontend/src/pages/ReportPage.jsx", {item["path"] for item in payload["filesToRemove"]})
+
+    def test_chat_detects_required_inputs_for_email_otp(self) -> None:
+        response = self.client.post(
+            "/api/agent/chat",
+            json={
+                "message": "Add email OTP login",
+                "currentIdea": "Build a login portal",
+                "currentPreview": {"projectName": "Login Portal"},
+                "selectedStack": {"language": "Python", "frontend": "React", "backend": "FastAPI", "database": "SQLite"},
+                "agentState": "preview_ready",
+                "llmMode": "free_rule_based",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        names = {item["name"] for item in payload["requiredInputs"]}
+        self.assertTrue({"SMTP_EMAIL", "SMTP_PASSWORD", "SMTP_HOST", "SMTP_PORT"}.issubset(names))
+        self.assertTrue(payload["needsConfirmation"])
+
+    def test_chat_stack_change_to_spring_boot_marks_confirmed_dirty_stack(self) -> None:
+        response = self.client.post(
+            "/api/agent/chat",
+            json={
+                "message": "Change backend to Spring Boot",
+                "currentIdea": "Build a todo app",
+                "currentPreview": {"projectName": "Todo App"},
+                "selectedStack": {"language": "Python", "frontend": "React", "backend": "FastAPI", "database": "SQLite"},
+                "agentState": "preview_ready",
+                "llmMode": "free_rule_based",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["action"], "change_stack")
+        self.assertEqual(payload["updatedStack"]["language"], "Java")
+        self.assertEqual(payload["updatedStack"]["backend"], "Spring Boot")
+        self.assertEqual(payload["updatedStack"]["source"], "chatbot_stack_change")
+        self.assertTrue(payload["updatedStack"]["isUserConfirmedStack"])
+        self.assertTrue(payload["updatedStack"]["isDirty"])
+
+    def test_chat_requested_files_flow_into_generation(self) -> None:
+        with patch.dict(os.environ, {"OLLAMA_BASE_URL": ""}, clear=False):
+            preview = asyncio.run(
+                agent_controller.generate_files(
+                    "Build a customer portal",
+                    selected_stack={
+                        "language": "Python",
+                        "frontend": "React",
+                        "backend": "FastAPI",
+                        "database": "SQLite",
+                        "aiTools": "None",
+                        "deployment": "Render",
+                    },
+                    generation_mode="fast",
+                    custom_files=[
+                        {
+                            "path": "frontend/src/pages/AdminDashboard.jsx",
+                            "purpose": "Admin dashboard page",
+                            "required": True,
+                        }
+                    ],
+                )
+            )
+
+        file_map = {item["path"]: item["content"] for item in preview.get("files", [])}
+        self.assertIn("frontend/src/pages/AdminDashboard.jsx", file_map)
+        self.assertIn("Admin dashboard page", file_map["frontend/src/pages/AdminDashboard.jsx"])
+        self.assertIn("frontend/src/pages/AdminDashboard.jsx", {item["path"] for item in preview.get("customFiles", [])})
+
+    def test_requested_files_alias_flows_into_preview_and_zip(self) -> None:
+        response = self.client.post(
+            "/api/suggest",
+            json={
+                "idea": "Build a customer portal",
+                "generationMode": "fast",
+                "selectedStack": {
+                    "language": "Python",
+                    "frontend": "React",
+                    "backend": "FastAPI",
+                    "database": "SQLite",
+                    "aiTools": "None",
+                    "deployment": "Render",
+                },
+                "requestedFiles": [
+                    {
+                        "path": "frontend/src/pages/ReportPage.jsx",
+                        "purpose": "Reports page and reporting workflow",
+                        "required": True,
+                    }
+                ],
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        preview = response.json()
+        file_paths = {item["path"] for item in preview.get("files", [])}
+        self.assertIn("frontend/src/pages/ReportPage.jsx", file_paths)
+        self.assertIn("frontend/src/pages/ReportPage.jsx", {item["path"] for item in preview.get("customFiles", [])})
+
+        zip_response = self.client.post("/api/zip", json={"preview": preview})
+        self.assertEqual(zip_response.status_code, 200)
+        zip_path = Path("generated") / zip_response.json()["filename"]
+        with ZipFile(zip_path) as archive:
+            self.assertTrue(
+                any(name.endswith("frontend/src/pages/ReportPage.jsx") for name in archive.namelist())
+            )
+
+    def test_files_to_remove_excludes_optional_file_from_preview_and_zip(self) -> None:
+        response = self.client.post(
+            "/api/suggest",
+            json={
+                "idea": "Build a customer portal",
+                "generationMode": "fast",
+                "selectedStack": {
+                    "language": "Python",
+                    "frontend": "React",
+                    "backend": "FastAPI",
+                    "database": "SQLite",
+                    "aiTools": "None",
+                    "deployment": "Render",
+                },
+                "requestedFiles": [
+                    {
+                        "path": "frontend/src/pages/ReportPage.jsx",
+                        "purpose": "Reports page and reporting workflow",
+                        "required": True,
+                    }
+                ],
+                "filesToRemove": [
+                    {
+                        "path": "frontend/src/pages/ReportPage.jsx",
+                        "reason": "User removed report page",
+                    }
+                ],
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        preview = response.json()
+        file_paths = {item["path"] for item in preview.get("files", [])}
+        self.assertNotIn("frontend/src/pages/ReportPage.jsx", file_paths)
+        self.assertNotIn("frontend/src/pages/ReportPage.jsx", {item["path"] for item in preview.get("customFiles", [])})
+
+        zip_response = self.client.post("/api/zip", json={"preview": preview})
+        self.assertEqual(zip_response.status_code, 200)
+        zip_path = Path("generated") / zip_response.json()["filename"]
+        with ZipFile(zip_path) as archive:
+            self.assertFalse(
+                any(name.endswith("frontend/src/pages/ReportPage.jsx") for name in archive.namelist())
+            )
+
+    def test_chat_static_ui_contract_for_popup_actions(self) -> None:
+        template = Path("app/templates/index.html").read_text(encoding="utf-8")
+        script = Path("app/static/app.js").read_text(encoding="utf-8")
+        styles = Path("app/static/style.css").read_text(encoding="utf-8")
+
+        for marker in ["chatToggleButton", "chatPanel", "chatCloseButton", "chatMessages", "chatActionBar", "chatInput", "chatSendButton"]:
+            self.assertIn(marker, template)
+        for function_name in [
+            "toggleChatPanel",
+            "openChatPanel",
+            "closeChatPanel",
+            "sendChatMessage",
+            "renderChatMessage",
+            "applyChatCorrections",
+            "applyChatGenerate",
+            "applyChatRemoveFiles",
+            "applyChatIdea",
+            "applyChatStack",
+            "regenerateFromChat",
+        ]:
+            self.assertIn(f"function {function_name}", script)
+        self.assertIn('event.key === "Escape"', script)
+        self.assertIn(".chat-panel.is-open", styles)
+        self.assertIn("transition: opacity", styles)
+
 
 if __name__ == "__main__":
     unittest.main()

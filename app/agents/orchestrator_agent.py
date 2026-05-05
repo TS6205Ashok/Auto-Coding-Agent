@@ -45,6 +45,9 @@ class OrchestratorAgent:
         stack_selection_source: str = "",
         is_user_confirmed_stack: bool = False,
         final_requirements: str = "",
+        custom_files: list[dict[str, Any]] | None = None,
+        files_to_remove: list[str] | None = None,
+        chat_pending_corrections: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         source = stack_selection_source or str((selected_stack or {}).get("source") or "")
         confirmed = bool(
@@ -63,6 +66,9 @@ class OrchestratorAgent:
             last_modified_field=str((selected_stack or {}).get("lastModifiedField") or (selected_stack or {}).get("last_modified_field") or ""),
             last_modified_at=(selected_stack or {}).get("lastModifiedAt") or (selected_stack or {}).get("last_modified_at"),
             final_requirements=final_requirements,
+            requested_custom_files=list(custom_files or []),
+            files_to_remove=list(files_to_remove or []),
+            chat_pending_corrections=list(chat_pending_corrections or []),
         )
         context = self.requirement_agent.run(context)
         context = self.stack_analysis_agent.run(context)
@@ -94,6 +100,11 @@ class OrchestratorAgent:
             or "generic",
             project_kind=ai.determine_project_kind(ai.normalize_stack_selection(preview.get("selectedStack")), preview.get("projectType")),
             template_family=str(preview.get("templateFamily") or "").strip(),
+            files_to_remove=[
+                str(item.get("path") if isinstance(item, Mapping) else item)
+                for item in preview.get("filesToRemove", [])
+            ],
+            chat_pending_corrections=list(preview.get("chatPendingCorrections") or []),
             preview=dict(preview),
         )
         context = self.packaging_agent.prepare_preview(context)

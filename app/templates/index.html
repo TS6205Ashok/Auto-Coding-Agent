@@ -314,6 +314,27 @@
       <p id="downloadText" class="download-copy">Your generated project ZIP is ready.</p>
       <a id="downloadLink" class="download-link" href="#" download>Download ZIP</a>
     </section>
+
+    <section id="chatPanel" class="chat-panel" hidden aria-label="Project chatbot">
+      <div class="chat-header">
+        <div>
+          <p class="section-label">Project Assistant</p>
+          <h2>Project Assistant</h2>
+        </div>
+        <div class="chat-header-actions">
+          <span id="chatModeBadge" class="chat-mode-badge">Free Rule Mode</span>
+          <button id="chatCloseButton" class="ghost-button" type="button" aria-label="Close chatbot">Close</button>
+        </div>
+      </div>
+      <div id="chatMessages" class="chat-messages"></div>
+      <div id="chatActionBar" class="chat-action-bar" hidden></div>
+      <div class="chat-input-row">
+        <input id="chatInput" class="question-input" type="text" placeholder="Discuss idea, add features, change stack..." />
+        <button id="chatSendButton" class="primary-button" type="button">Send</button>
+      </div>
+    </section>
+
+    <button id="chatToggleButton" class="chat-toggle-button" type="button" aria-controls="chatPanel" aria-expanded="false">Chat</button>
   </main>
 
   <script src="/static/app.js" defer></script>
