@@ -208,11 +208,7 @@ python app.py
 
 9. Generate a project, create the ZIP, then click **Open in IDE**.
 
-code-server may ask for a generated project password. Use the password returned by the local IDE status API:
 
-```text
-http://127.0.0.1:7860/api/ide-status/<project_id>
-```
 
 IDE environment defaults:
 

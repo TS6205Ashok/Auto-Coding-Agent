@@ -36,6 +36,7 @@ CHAT_INTENTS = {
     "generation_intent",
     "repair_intent",
     "ide_intent",
+    "file_generation_intent",
 }
 
 
@@ -196,9 +197,10 @@ class ChatCoordinatorAgent:
             "suggest stacks, ask follow-up questions, and draft project plans in markdown. "
             "The project pipeline is separate and must run only for strict explicit generation intent. "
             "Do not generate final project files directly. Always return strict JSON. "
-            "Set intent to one of: chat_intent, planning_intent, generation_intent, repair_intent, ide_intent. "
+            "Set intent to one of: chat_intent, planning_intent, generation_intent, repair_intent, ide_intent, file_generation_intent. "
             "Only set generation_intent/action generate_project when the user explicitly says generate project, "
-            "generate this, create files, build starter, build it now, or confirm and generate. "
+            "generate this, build starter, build it now, or confirm and generate. "
+            "If the user explicitly asks to add or create specific files, set file_generation_intent and action add_files. "
             "Normal project ideas, questions, stack suggestions, and plans are planning_intent or chat_intent. "
             "Preview modifications are repair_intent and require confirmation. Never require paid APIs for chatbot behavior.\n\n"
             "Allowed actions: none, update_idea, update_requirements, generate_project, regenerate_project, "
@@ -385,7 +387,7 @@ class ChatCoordinatorAgent:
                     features_to_add,
                     features_to_remove,
                 ),
-                intent="repair_intent",
+                intent="file_generation_intent" if action == "add_files" else "repair_intent",
                 action=action,
                 updatedRequirements=self._merge_requirements(current_idea or str(current_preview.get("problemStatement") or ""), message),
                 requestedFiles=requested_files,

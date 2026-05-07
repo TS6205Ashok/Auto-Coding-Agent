@@ -202,15 +202,16 @@ function resetQuestionFlow() {
   showingSuggestion = false;
 }
 
-function resetProjectContractStateForNewIdea(nextIdea) {
+function resetProjectContractStateForNewIdea(nextIdea, forceReset = false) {
   const normalizedNext = String(nextIdea || "").trim();
   const normalizedCurrent = String(baseIdea || "").trim();
-  if (!normalizedNext || normalizedNext === normalizedCurrent) {
+  if (!forceReset && (!normalizedNext || normalizedNext === normalizedCurrent)) {
     return;
   }
 
   currentPreview = null;
   currentProjectId = "";
+  finalRequirements = ""; // Clear global final requirements
   chatFinalRequirements = "";
   chatPendingCorrections = [];
   chatRequestedFiles = [];
@@ -910,64 +911,17 @@ function renderChatMessages() {
 }
 
 function renderSafeMarkdown(content) {
-  const source = String(content || "");
-  const blocks = [];
-  const withPlaceholders = source.replace(/```([\s\S]*?)```/g, (_match, code) => {
-    const index = blocks.length;
-    blocks.push(`<pre><code>${escapeHtml(code.trim())}</code></pre>`);
-    return `@@CODE_BLOCK_${index}@@`;
-  });
-  const lines = withPlaceholders.split(/\r?\n/);
-  const html = [];
-  let listOpen = false;
-
-  lines.forEach((line) => {
-    const trimmed = line.trim();
-    const codeMatch = trimmed.match(/^@@CODE_BLOCK_(\d+)@@$/);
-    if (codeMatch) {
-      if (listOpen) {
-        html.push("</ul>");
-        listOpen = false;
-      }
-      html.push(blocks[Number(codeMatch[1])] || "");
-      return;
-    }
-    if (!trimmed) {
-      if (listOpen) {
-        html.push("</ul>");
-        listOpen = false;
-      }
-      return;
-    }
-    if (trimmed.startsWith("- ")) {
-      if (!listOpen) {
-        html.push("<ul>");
-        listOpen = true;
-      }
-      html.push(`<li>${renderInlineMarkdown(trimmed.slice(2))}</li>`);
-      return;
-    }
-    if (listOpen) {
-      html.push("</ul>");
-      listOpen = false;
-    }
-    if (trimmed.startsWith("### ")) {
-      html.push(`<h4>${renderInlineMarkdown(trimmed.slice(4))}</h4>`);
-    } else if (trimmed.startsWith("## ")) {
-      html.push(`<h3>${renderInlineMarkdown(trimmed.slice(3))}</h3>`);
-    } else if (/^\d+\.\s+/.test(trimmed)) {
-      html.push(`<p>${renderInlineMarkdown(trimmed)}</p>`);
-    } else {
-      html.push(`<p>${renderInlineMarkdown(trimmed)}</p>`);
-    }
-  });
-  if (listOpen) {
-    html.push("</ul>");
+  if (typeof marked !== "undefined" && typeof DOMPurify !== "undefined") {
+    return DOMPurify.sanitize(marked.parse(content || ""));
   }
-  return html.join("");
+  // Fallback if CDN fails
+  return escapeHtml(content || "").replace(/\n/g, "<br>");
 }
 
 function renderInlineMarkdown(value) {
+  if (typeof marked !== "undefined" && typeof DOMPurify !== "undefined") {
+    return DOMPurify.sanitize(marked.parseInline(value || ""));
+  }
   return escapeHtml(value)
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
@@ -1003,10 +957,12 @@ function renderChatActions(action) {
       ? "Change Stack"
       : action.action === "remove_files" || action.action === "remove_feature"
         ? "Apply Corrections"
-      : action.action === "add_files"
-        ? "Add To Current Project"
-        : "Apply Corrections";
+      : "Apply Corrections";
     addChatActionButton(confirmLabel, () => applyChatAction(action));
+    addChatActionButton("Cancel", cancelChatAction, "ghost-button");
+  }
+  if (action.intent === "file_generation_intent" && action.needsConfirmation) {
+    addChatActionButton("Add To Current Project", () => applyChatAction(action));
     addChatActionButton("Cancel", cancelChatAction, "ghost-button");
   }
   if (action.intent === "generation_intent" && !action.needsConfirmation && (action.shouldGenerate || action.action === "generate_project")) {
@@ -1083,7 +1039,7 @@ async function applyChatAction(action) {
     await applyChatRemoveFiles(action);
     return;
   }
-  if (action.intent === "repair_intent" && (action.action === "add_files" || action.action === "add_feature" || action.action === "update_required_inputs" || action.shouldRegenerate || action.updatedRequirements || action.requestedFiles?.length)) {
+  if ((action.intent === "repair_intent" || action.intent === "file_generation_intent") && (action.action === "add_files" || action.action === "add_feature" || action.action === "update_required_inputs" || action.shouldRegenerate || action.updatedRequirements || action.requestedFiles?.length)) {
     await applyChatCorrections(action);
     return;
   }
@@ -1097,6 +1053,10 @@ async function applyChatCorrections(action) {
   chatActionBar.hidden = true;
   if (currentPreview) {
     await regenerateFromChat(action, { alreadyMerged: true });
+    if (currentProjectId && !closeIdeButton.hidden) {
+      await handleConfirmZip();
+      setStatus("Corrections applied and synchronized to the active IDE workspace.", "success");
+    }
     return;
   }
   setStatus("Corrections are staged. Generate a project preview before applying repair actions.", "success");

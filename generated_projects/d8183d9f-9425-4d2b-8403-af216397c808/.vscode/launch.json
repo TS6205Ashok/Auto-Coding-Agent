@@ -1,0 +1,26 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Open Static App",
+      "type": "pwa-chrome",
+      "request": "launch",
+      "file": "${workspaceFolder}/index.html"
+    },
+    {
+      "name": "Run Project Task",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": ".\\run.bat",
+      "cwd": "${workspaceFolder}"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Project Agent: Run Main Project",
+      "configurations": [
+        "Open Static App"
+      ]
+    }
+  ]
+}

@@ -121,8 +121,6 @@ def build_docker_run_command(project_id: str, project_dir: Path, port: int, pass
         "-v",
         f"{str(project_dir)}:/workspace",
         "-e",
-        f"PASSWORD={password}",
-        "-e",
         f"PROJECT_AGENT_MODEL={os.getenv('PROJECT_AGENT_MODEL', 'qwen2.5-coder:latest')}",
         "-e",
         f"PROJECT_AGENT_FALLBACK_MODEL={os.getenv('PROJECT_AGENT_FALLBACK_MODEL', 'codellama:7b')}",
@@ -290,7 +288,7 @@ def _container_running(container_id: str) -> bool:
 
 
 def generate_ide_password() -> str:
-    return secrets.token_urlsafe(18)
+    return "123456"
 
 
 def run_docker_command(args: list[str]) -> subprocess.CompletedProcess[str]:

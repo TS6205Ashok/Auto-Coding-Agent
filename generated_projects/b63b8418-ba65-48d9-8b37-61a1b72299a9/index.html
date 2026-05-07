@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Give Me Any Small</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="hero">
+        <p class="eyebrow">Project Agent Starter</p>
+        <h1>Give Me Any Small</h1>
+        <p class="hero-copy">
+          Slide the numbered tiles into order. Click a tile next to the empty space to move it.
+        </p>
+      </section>
+
+      <section class="panel controls">
+        <button id="shuffleButton" type="button">Shuffle / Start</button>
+        <button id="resetButton" type="button">Reset</button>
+        <p id="moveCounter">Moves: 0</p>
+        <p id="statusMessage">Arrange the board in order from 1 to 8.</p>
+      </section>
+
+      <section class="panel board-panel">
+        <div id="puzzleBoard" class="puzzle-board" aria-label="Sliding puzzle board"></div>
+      </section>
+
+      <section class="panel instructions">
+        <h2>How to play</h2>
+        <ol>
+          <li>Click <strong>Shuffle / Start</strong> to scramble the board.</li>
+          <li>Move any tile touching the empty space.</li>
+          <li>Put the numbers back in order to win.</li>
+        </ol>
+        <p class="version-label">Project Agent Generated Starter v1</p>
+      </section>
+    </main>
+    <script src="script.js"></script>
+  </body>
+</html>
