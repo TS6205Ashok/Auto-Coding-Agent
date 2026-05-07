@@ -2066,7 +2066,28 @@ class AgentControllerTests(unittest.TestCase):
 
         files_response = self.client.get(f"/api/files/{project_id}")
         self.assertEqual(files_response.status_code, 200)
-        self.assertIn("backend/app/main.py", files_response.json()["files"])
+        workspace_files = files_response.json()["files"]
+        self.assertIn("backend/app/main.py", workspace_files)
+        self.assertIn("PROJECT_AGENT_IDE.md", workspace_files)
+        self.assertIn(".vscode/settings.json", workspace_files)
+        self.assertIn(".vscode/extensions.json", workspace_files)
+
+        ide_doc = self.client.get(f"/api/file/{project_id}", params={"path": "PROJECT_AGENT_IDE.md"})
+        self.assertEqual(ide_doc.status_code, 200)
+        self.assertIn("Project Agent IDE", ide_doc.json()["content"])
+        self.assertIn("real code-server", ide_doc.json()["content"])
+
+        settings_response = self.client.get(f"/api/file/{project_id}", params={"path": ".vscode/settings.json"})
+        self.assertEqual(settings_response.status_code, 200)
+        settings = json.loads(settings_response.json()["content"])
+        self.assertEqual(settings["workbench.colorTheme"], "Project Agent IDE Dark")
+        self.assertEqual(settings["workbench.startupEditor"], "none")
+        self.assertEqual(settings["projectAgent.ollamaUrl"], "http://host.docker.internal:11434/api/generate")
+
+        extensions_response = self.client.get(f"/api/file/{project_id}", params={"path": ".vscode/extensions.json"})
+        self.assertEqual(extensions_response.status_code, 200)
+        extensions = json.loads(extensions_response.json()["content"])
+        self.assertIn("project-agent.project-agent", extensions["recommendations"])
 
     def test_ide_rejects_unsafe_project_ids_and_paths(self) -> None:
         bad_id_response = self.client.get("/open-ide/not-a-uuid")
@@ -2088,7 +2109,7 @@ class AgentControllerTests(unittest.TestCase):
         self.assertEqual(command[0:3], ["docker", "run", "-d"])
         self.assertIn("project-agent-ide", command)
         self.assertTrue(any("host.docker.internal:11434/api/generate" in item for item in command))
-        self.assertTrue(any(item.startswith("PASSWORD=") for item in command))
+        self.assertNotIn("PASSWORD=", " ".join(command))
 
     def test_open_ide_reuses_container_and_close_removes_it(self) -> None:
         project_id = "00000000-0000-4000-8000-000000000001"
@@ -2226,13 +2247,22 @@ class AgentControllerTests(unittest.TestCase):
         package_json = json.loads(Path("vscode-extension/project-agent/package.json").read_text(encoding="utf-8"))
         dockerfile = Path("Dockerfile.ide").read_text(encoding="utf-8")
         extension_ts = Path("vscode-extension/project-agent/src/extension.ts").read_text(encoding="utf-8")
+        theme = json.loads(Path("vscode-extension/project-agent/themes/project-agent-ide-dark.json").read_text(encoding="utf-8"))
 
+        self.assertEqual(package_json["displayName"], "Project Agent IDE")
         self.assertIn("projectAgent", package_json["contributes"]["viewsContainers"]["activitybar"][0]["id"])
         self.assertIn("projectAgent.chatView", json.dumps(package_json["contributes"]["views"]))
         self.assertIn("projectAgent.model", package_json["contributes"]["configuration"]["properties"])
+        self.assertEqual(package_json["contributes"]["viewsContainers"]["activitybar"][0]["title"], "Project Agent IDE")
+        self.assertEqual(package_json["contributes"]["themes"][0]["label"], "Project Agent IDE Dark")
+        self.assertEqual(package_json["contributes"]["themes"][0]["path"], "./themes/project-agent-ide-dark.json")
+        self.assertEqual(theme["name"], "Project Agent IDE Dark")
+        self.assertEqual(theme["type"], "dark")
         self.assertIn("--allow-missing-repository", package_json["scripts"]["package"])
+        self.assertIn("FROM codercom/code-server:latest", dockerfile)
         self.assertIn("code-server --install-extension /extensions/project-agent.vsix", dockerfile)
-        self.assertIn('--auth", "password"', dockerfile)
+        self.assertIn('"--auth", "none"', dockerfile)
+        self.assertIn('"/workspace"', dockerfile)
         self.assertIn("host.docker.internal:11434/api/generate", dockerfile)
         self.assertIn("host.docker.internal:11434/api/generate", extension_ts)
         self.assertIn("Ollama is not running. Start Ollama and make sure qwen2.5-coder is installed.", extension_ts)

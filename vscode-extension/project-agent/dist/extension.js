@@ -232,7 +232,7 @@ async function callOllamaWithFallback(prompt) {
             return await callOllama(url, fallback, prompt);
         }
         catch {
-            return `Ollama is not reachable at ${url}. Start Ollama and pull ${primary} or ${fallback}. Original error: ${String(firstError)}`;
+            return `Ollama is not running. Start Ollama and make sure qwen2.5-coder is installed. URL: ${url}. Original error: ${String(firstError)}`;
         }
     }
 }

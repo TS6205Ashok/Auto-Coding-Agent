@@ -239,7 +239,7 @@ class ChatCoordinatorAgent:
             result.intent = self._intent_for_action(result.action, result.shouldGenerate, result.shouldRegenerate)
         if result.intent != "generation_intent" and result.shouldGenerate:
             result.shouldGenerate = False
-        if result.intent not in {"repair_intent", "generation_intent"} and result.shouldRegenerate:
+        if result.intent not in {"repair_intent", "generation_intent", "file_generation_intent"} and result.shouldRegenerate:
             result.shouldRegenerate = False
         if result.intent in {"chat_intent", "planning_intent", "ide_intent"}:
             result.requestedFiles = []
@@ -387,7 +387,7 @@ class ChatCoordinatorAgent:
                     features_to_add,
                     features_to_remove,
                 ),
-                intent="file_generation_intent" if action == "add_files" else "repair_intent",
+                intent="repair_intent",
                 action=action,
                 updatedRequirements=self._merge_requirements(current_idea or str(current_preview.get("problemStatement") or ""), message),
                 requestedFiles=requested_files,

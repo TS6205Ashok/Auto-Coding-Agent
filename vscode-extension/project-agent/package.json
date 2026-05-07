@@ -1,7 +1,7 @@
 {
   "name": "project-agent",
-  "displayName": "Project Agent",
-  "description": "Local Ollama coding assistant for generated projects.",
+  "displayName": "Project Agent IDE",
+  "description": "Branded code-server IDE assistant for generated Project Agent workspaces.",
   "version": "0.1.0",
   "publisher": "project-agent",
   "engines": {
@@ -30,7 +30,7 @@
       }
     ],
     "configuration": {
-      "title": "Project Agent",
+      "title": "Project Agent IDE",
       "properties": {
         "projectAgent.model": {
           "type": "string",
@@ -53,7 +53,7 @@
       "activitybar": [
         {
           "id": "projectAgent",
-          "title": "Project Agent",
+          "title": "Project Agent IDE",
           "icon": "media/project-agent.svg"
         }
       ]
@@ -65,7 +65,14 @@
           "name": "Project Agent"
         }
       ]
-    }
+    },
+    "themes": [
+      {
+        "label": "Project Agent IDE Dark",
+        "uiTheme": "vs-dark",
+        "path": "./themes/project-agent-ide-dark.json"
+      }
+    ]
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

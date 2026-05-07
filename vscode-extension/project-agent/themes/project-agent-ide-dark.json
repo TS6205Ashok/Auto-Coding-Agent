@@ -1,0 +1,75 @@
+{
+  "name": "Project Agent IDE Dark",
+  "type": "dark",
+  "semanticHighlighting": true,
+  "colors": {
+    "activityBar.background": "#111827",
+    "activityBar.foreground": "#F9FAFB",
+    "activityBarBadge.background": "#22C55E",
+    "activityBarBadge.foreground": "#052E16",
+    "sideBar.background": "#0F172A",
+    "sideBar.foreground": "#E5E7EB",
+    "sideBarTitle.foreground": "#F9FAFB",
+    "editor.background": "#0B1020",
+    "editor.foreground": "#E5E7EB",
+    "editorLineNumber.foreground": "#64748B",
+    "editorCursor.foreground": "#38BDF8",
+    "editor.selectionBackground": "#1D4ED866",
+    "editor.inactiveSelectionBackground": "#1E293B",
+    "editorGroupHeader.tabsBackground": "#0F172A",
+    "tab.activeBackground": "#111827",
+    "tab.activeForeground": "#FFFFFF",
+    "tab.inactiveBackground": "#0F172A",
+    "tab.inactiveForeground": "#94A3B8",
+    "statusBar.background": "#111827",
+    "statusBar.foreground": "#F9FAFB",
+    "titleBar.activeBackground": "#0F172A",
+    "titleBar.activeForeground": "#F9FAFB",
+    "terminal.background": "#020617",
+    "terminal.foreground": "#E5E7EB",
+    "button.background": "#2563EB",
+    "button.foreground": "#FFFFFF",
+    "input.background": "#111827",
+    "input.foreground": "#F9FAFB",
+    "input.border": "#334155",
+    "focusBorder": "#38BDF8"
+  },
+  "tokenColors": [
+    {
+      "scope": ["comment", "punctuation.definition.comment"],
+      "settings": {
+        "foreground": "#94A3B8"
+      }
+    },
+    {
+      "scope": ["keyword", "storage.type", "storage.modifier"],
+      "settings": {
+        "foreground": "#60A5FA"
+      }
+    },
+    {
+      "scope": ["string", "constant.other.symbol"],
+      "settings": {
+        "foreground": "#86EFAC"
+      }
+    },
+    {
+      "scope": ["entity.name.function", "support.function"],
+      "settings": {
+        "foreground": "#38BDF8"
+      }
+    },
+    {
+      "scope": ["entity.name.type", "support.class", "support.type"],
+      "settings": {
+        "foreground": "#FBBF24"
+      }
+    },
+    {
+      "scope": ["constant.numeric", "constant.language"],
+      "settings": {
+        "foreground": "#F472B6"
+      }
+    }
+  ]
+}

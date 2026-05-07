@@ -156,6 +156,18 @@ This keeps ZIP creation compatible with Hugging Face temporary storage.
 - The app assumes ephemeral writable storage is acceptable for preview ZIP downloads
 - No dependency installation happens during preview or ZIP creation
 
+## Project Agent IDE
+
+Project Agent IDE is a branded browser IDE powered by real `code-server`. It keeps VS Code features such as the Explorer, terminal, tabs, settings, extensions, and command palette, while adding Project Agent branding and a default assistant.
+
+Each generated IDE workspace includes:
+
+- `PROJECT_AGENT_IDE.md` with quick-start instructions
+- `.vscode/settings.json` with the `Project Agent IDE Dark` theme and Project Agent defaults
+- `.vscode/extensions.json` recommending the bundled Project Agent extension
+
+The Docker image installs `vscode-extension/project-agent/project-agent.vsix` by default. The assistant uses Ollama from inside Docker through `http://host.docker.internal:11434/api/generate`.
+
 ## Browser IDE Setup On Windows
 
 The IDE workflow uses real `code-server`, not a fake Monaco-only editor.

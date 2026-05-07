@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import secrets
 import shutil
@@ -24,6 +25,8 @@ DEFAULT_IDE_HOST = os.getenv("PROJECT_AGENT_IDE_HOST", "127.0.0.1")
 DEFAULT_OLLAMA_URL = "http://host.docker.internal:11434/api/generate"
 DOCKER_UNAVAILABLE_MESSAGE = "Docker Desktop is not running. Please start Docker and try again."
 DEFAULT_IDLE_TIMEOUT_MINUTES = 45
+PROJECT_AGENT_IDE_THEME = "Project Agent IDE Dark"
+PROJECT_AGENT_EXTENSION_ID = "project-agent.project-agent"
 
 
 @dataclass(slots=True)
@@ -77,12 +80,95 @@ def materialize_preview_workspace(
         target_path = resolve_workspace_path(project_dir, relative_path)
         target_path.parent.mkdir(parents=True, exist_ok=True)
         target_path.write_text(content, encoding="utf-8")
+    write_project_agent_ide_branding(project_dir, preview)
     return {
         "projectId": project_id,
         "projectPath": str(project_dir),
         "ideUrl": f"/open-ide/{project_id}",
         "workspaceDownloadUrl": f"/download/{project_id}",
     }
+
+
+def write_project_agent_ide_branding(project_dir: Path, preview: dict[str, Any]) -> None:
+    project_name = str(preview.get("projectName") or "Generated Project").strip() or "Generated Project"
+    _write_workspace_text(
+        project_dir,
+        "PROJECT_AGENT_IDE.md",
+        build_project_agent_ide_doc(project_name),
+    )
+    _write_workspace_json(project_dir, ".vscode/settings.json", build_project_agent_ide_settings())
+    _write_workspace_json(project_dir, ".vscode/extensions.json", build_project_agent_ide_extensions())
+
+
+def build_project_agent_ide_doc(project_name: str) -> str:
+    return f"""# Project Agent IDE
+
+Welcome to **Project Agent IDE** for `{project_name}`.
+
+This workspace is powered by real code-server, so you still have the VS Code file explorer, tabs, terminal, settings, extensions, and command palette.
+
+## Start Here
+
+1. Open the **Project Agent** icon in the Activity Bar.
+2. Ask the assistant to explain files, suggest fixes, or generate focused code snippets.
+3. Use the Explorer to inspect generated files.
+4. Use the integrated terminal to run setup and start commands from the project README.
+
+## Project Agent Assistant
+
+- **Open Chat** focuses the Project Agent assistant.
+- **Apply Fix** can apply the last code block to the active editor after confirmation.
+- **Insert as New File** asks for a workspace-relative path before writing.
+- The assistant sends local workspace context to Ollama only.
+
+## Ollama From Docker
+
+Inside the IDE container, Project Agent calls:
+
+```text
+http://host.docker.internal:11434/api/generate
+```
+
+Make sure Ollama is running on the host and the configured model is available.
+
+## ZIP and Workspace
+
+The original generated ZIP is available from Project Agent. If you edit files in this IDE, use the workspace download endpoint to download the edited workspace.
+"""
+
+
+def build_project_agent_ide_settings() -> dict[str, Any]:
+    return {
+        "workbench.colorTheme": PROJECT_AGENT_IDE_THEME,
+        "workbench.startupEditor": "none",
+        "workbench.editorAssociations": {
+            "PROJECT_AGENT_IDE.md": "default",
+        },
+        "workbench.activityBar.location": "side",
+        "workbench.sideBar.location": "left",
+        "extensions.ignoreRecommendations": False,
+        "security.workspace.trust.enabled": False,
+        "projectAgent.model": os.getenv("PROJECT_AGENT_MODEL", "qwen2.5-coder:latest"),
+        "projectAgent.fallbackModel": os.getenv("PROJECT_AGENT_FALLBACK_MODEL", "codellama:7b"),
+        "projectAgent.ollamaUrl": os.getenv("PROJECT_AGENT_OLLAMA_URL", DEFAULT_OLLAMA_URL),
+    }
+
+
+def build_project_agent_ide_extensions() -> dict[str, Any]:
+    return {
+        "recommendations": [PROJECT_AGENT_EXTENSION_ID],
+        "unwantedRecommendations": [],
+    }
+
+
+def _write_workspace_json(project_dir: Path, relative_path: str, payload: dict[str, Any]) -> None:
+    _write_workspace_text(project_dir, relative_path, json.dumps(payload, indent=2) + "\n")
+
+
+def _write_workspace_text(project_dir: Path, relative_path: str, content: str) -> None:
+    target_path = resolve_workspace_path(project_dir, relative_path)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text(content, encoding="utf-8")
 
 
 def sanitize_workspace_path(raw_path: str) -> Path:
