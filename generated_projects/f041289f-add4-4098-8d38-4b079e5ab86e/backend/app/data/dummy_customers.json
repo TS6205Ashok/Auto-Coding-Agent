@@ -1,0 +1,57 @@
+{
+  "customers": {
+    "CUST1001": {
+      "name": "Asha Kumar",
+      "account_balance": 45230.75,
+      "otp": "123456",
+      "recent_transactions": [
+        {
+          "date": "2026-05-01",
+          "description": "UPI grocery payment",
+          "amount": 1250.0
+        },
+        {
+          "date": "2026-05-02",
+          "description": "Salary credit",
+          "amount": 85000.0
+        },
+        {
+          "date": "2026-05-04",
+          "description": "ATM withdrawal",
+          "amount": 5000.0
+        }
+      ],
+      "cards": [
+        {
+          "type": "debit",
+          "last4": "1234",
+          "status": "active"
+        }
+      ],
+      "loan": {
+        "type": "home loan",
+        "emi": 18500,
+        "next_due_date": "2026-06-05"
+      },
+      "complaints": [
+        {
+          "complaint_id": "CMP9001",
+          "status": "In progress",
+          "summary": "Debit card replacement request"
+        }
+      ]
+    }
+  },
+  "locations": [
+    {
+      "type": "branch",
+      "name": "MG Road Branch",
+      "address": "MG Road, Bengaluru"
+    },
+    {
+      "type": "atm",
+      "name": "Indiranagar ATM",
+      "address": "100 Feet Road, Bengaluru"
+    }
+  ]
+}
