@@ -285,7 +285,7 @@ STACK_REGISTRY: dict[str, StackRegistryEntry] = {
         alternative_ide="Visual Studio",
         runtime_tools=["g++ or MSVC", "CMake optional"],
         package_manager="CMake",
-        required_files=["main.cpp", "run.sh", "run.bat", *VSCODE_FILES, *DOC_FILES],
+        required_files=["main.cpp", "run.sh", "run.bat", "setup.sh", "setup.bat", *VSCODE_FILES, *DOC_FILES],
         forbidden_files=["requirements.txt", "pom.xml", "backend/app/main.py", "backend/", "package.json"],
         forbidden_terms=["FastAPI", "Flask", "Spring Boot", "uvicorn", "pip install", "npm install"],
         install_commands=["No package install required"],
@@ -408,10 +408,21 @@ def build_final_architecture_decision(
 
 def final_architecture_from_preview(preview: Mapping[str, Any]) -> FinalArchitectureDecision:
     prompt = str(preview.get("problemStatement") or preview.get("summary") or preview.get("projectName") or "")
+    if str(preview.get("templateFamily") or "") == "puzzle-game":
+        selected_stack = {
+            "language": "JavaScript",
+            "frontend": "HTML/CSS/JavaScript",
+            "backend": "None",
+            "database": "None",
+            "aiTools": "None",
+            "deployment": "None",
+        }
+    else:
+        selected_stack = _normalize_stack(preview.get("selectedStack"))
     return build_final_architecture_decision(
         prompt=prompt,
-        requested_stack=_normalize_stack(preview.get("selectedStack")),
-        inferred_stack=_normalize_stack(preview.get("selectedStack")),
+        requested_stack=selected_stack,
+        inferred_stack=selected_stack,
         declared_project_type=str(preview.get("projectType") or ""),
         project_category="game" if str(preview.get("templateFamily") or "") == "puzzle-game" else "",
         migration_summary=preview.get("migrationSummary") if isinstance(preview.get("migrationSummary"), Mapping) else None,

@@ -8,6 +8,7 @@ from app.agents.repair_agent import RepairAgent
 from app.agents.validation_agent import ValidationAgent
 from app.services import ai_service as ai
 from app.services.architecture_registry import final_architecture_from_preview
+from app.services.file_service import contract_required_paths, missing_contract_files
 from app.services.zip_service import create_project_zip
 
 
@@ -27,6 +28,7 @@ class PackagingAgent:
         repair_attempts = 0
         repaired_files: set[str] = set(context.repaired_files)
         context = self.validation_agent.run(context)
+        max_repair_attempts = 3
         if context.validation_findings:
             repair_attempts += 1
             context = self.repair_agent.run(context)
@@ -45,6 +47,10 @@ class PackagingAgent:
             context.preview["finalArchitecture"] = context.final_architecture.to_dict()
             context.preview["stackSelectionSource"] = context.final_architecture.stack_selection_source
             context.preview["isUserConfirmedStack"] = context.is_user_confirmed_stack
+            context.recommended_ide = context.recommended_ide or context.final_architecture.recommended_ide
+            context.alternative_ide = context.alternative_ide or context.final_architecture.alternative_ide
+            context.runtime_tools = context.runtime_tools or list(context.final_architecture.runtime_tools)
+            context.package_manager = context.package_manager or context.final_architecture.package_manager
         if context.migration_summary:
             context.preview["migrationSummary"] = context.migration_summary
         if context.source_language or context.source_framework or context.source_project_type:
@@ -56,7 +62,7 @@ class PackagingAgent:
             }
         context.preview = ai.prepare_preview_for_output(context.preview)
         context = self.validation_agent.run(context)
-        if context.validation_findings and repair_attempts < 2:
+        while context.validation_findings and repair_attempts < max_repair_attempts:
             repair_attempts += 1
             context = self.repair_agent.run(context)
             repaired_files.update(context.repaired_files)
@@ -95,12 +101,11 @@ class PackagingAgent:
                 context.final_requirements or context.prompt,
             )
             context = self.validation_agent.run(context)
-        context.preview["validationStatus"] = {
-            "valid": not bool(context.validation_findings),
-            "findings": list(context.validation_findings),
-            "repairAttempts": repair_attempts,
-            "repairedFiles": sorted(repaired_files),
-        }
+        context.preview["validationStatus"] = self._build_validation_status(
+            context,
+            repair_attempts=repair_attempts,
+            repaired_files=sorted(repaired_files),
+        )
         logger.info(
             "PackagingAgent prepared preview template=%s file_count=%s findings=%s",
             context.template_family or "generic",
@@ -126,13 +131,58 @@ class PackagingAgent:
             preview=dict(preview),
             final_architecture=final_architecture,
         )
+        context.generation_quality = str(preview.get("generationQuality") or "complete")
         context.selected_stack = final_architecture.selected_stack
+        context.project_kind = ai.determine_project_kind(final_architecture.selected_stack, final_architecture.project_type)
+        context.recommended_ide = final_architecture.recommended_ide
+        context.alternative_ide = final_architecture.alternative_ide
+        context.runtime_tools = list(final_architecture.runtime_tools)
+        context.package_manager = final_architecture.package_manager
         if final_architecture.stack_family == "static_frontend" and final_architecture.project_type == "game_or_puzzle":
             context.template_family = "puzzle-game"
         context = self.prepare_preview(context)
+        validation_status = context.preview.get("validationStatus") or {}
+        if not validation_status.get("valid"):
+            findings = "; ".join(validation_status.get("findings") or [])
+            raise ValueError(f"Cannot create ZIP because preview validation failed: {findings}")
+        if validation_status.get("missingFiles"):
+            raise ValueError(
+                "Cannot create ZIP because required files are missing: "
+                + ", ".join(validation_status.get("missingFiles") or [])
+            )
         logger.info(
             "PackagingAgent prepared preview/ZIP template=%s file_count=%s",
             context.template_family or "generic",
             len(context.preview.get("files", [])),
         )
         return create_project_zip(context.preview, generated_dir)
+
+    def _build_validation_status(
+        self,
+        context: AgentWorkflowContext,
+        *,
+        repair_attempts: int,
+        repaired_files: list[str],
+    ) -> dict[str, object]:
+        project_contract = (
+            context.project_contract.to_dict()
+            if context.project_contract
+            else context.preview.get("projectContract")
+        )
+        missing_files = missing_contract_files(context.preview.get("files", []), project_contract)
+        generated_file_count = len(context.preview.get("files", []))
+        required_file_count = len(contract_required_paths(project_contract))
+        findings = list(context.validation_findings)
+        for missing_path in missing_files:
+            finding = f"Missing contract-required file: {missing_path}"
+            if finding not in findings:
+                findings.append(finding)
+        return {
+            "valid": not findings and not missing_files,
+            "findings": findings,
+            "missingFiles": missing_files,
+            "repairAttempts": repair_attempts,
+            "repairedFiles": repaired_files,
+            "contractRequiredFileCount": required_file_count,
+            "generatedFileCount": generated_file_count,
+        }

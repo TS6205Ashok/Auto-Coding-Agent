@@ -283,10 +283,12 @@ class AgentController:
         custom_files: list[dict[str, Any]] | None = None,
         files_to_remove: list[str] | None = None,
         chat_pending_corrections: list[dict[str, Any]] | None = None,
+        generation_quality: str = "complete",
     ) -> dict[str, Any]:
         return await self.orchestrator.run(
             prompt,
             generation_mode,
+            generation_quality=generation_quality,
             selected_stack=selected_stack,
             stack_selection_source=stack_selection_source,
             is_user_confirmed_stack=is_user_confirmed_stack,
@@ -307,10 +309,12 @@ class AgentController:
         custom_files: list[dict[str, Any]] | None = None,
         files_to_remove: list[str] | None = None,
         chat_pending_corrections: list[dict[str, Any]] | None = None,
+        generation_quality: str = "complete",
     ) -> dict[str, Any]:
         return await self.build_preview(
             idea,
             generation_mode=generation_mode,
+            generation_quality=generation_quality,
             selected_stack=selected_stack,
             stack_selection_source=stack_selection_source,
             is_user_confirmed_stack=is_user_confirmed_stack,

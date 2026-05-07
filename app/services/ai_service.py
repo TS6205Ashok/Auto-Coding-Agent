@@ -332,9 +332,9 @@ async def generate_project_preview(
 
     return await agent_controller.generate_files(
         idea,
-        selected_stack,
-        generation_mode,
-        final_requirements,
+        selected_stack=selected_stack,
+        generation_mode=generation_mode,
+        final_requirements=final_requirements,
     )
 
 
@@ -1503,6 +1503,7 @@ def normalize_preview(
     preview_payload = {
         "projectName": project_name,
         "projectType": str(raw.get("projectType") or project_kind.get("label", "")),
+        "generationQuality": str(raw.get("generationQuality") or "complete"),
         "detectedUserChoices": detected_choices,
         "selectedStack": selected_stack,
         "chosenStack": chosen_stack,
@@ -1541,6 +1542,7 @@ def normalize_preview(
         "stackSelectionSource",
         "isUserConfirmedStack",
         "validationStatus",
+        "generationQuality",
     ):
         if passthrough_key in raw:
             preview_payload[passthrough_key] = raw.get(passthrough_key)

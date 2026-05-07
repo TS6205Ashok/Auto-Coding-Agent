@@ -1,0 +1,6 @@
+<article class="card">
+  {% if msg.role %}
+  <p class="section-label">{{ msg.role }}</p>
+  {% endif %}
+  <p class="text-block">{{ msg.content | default(msg) }}</p>
+</article>

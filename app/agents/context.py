@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 class AgentWorkflowContext:
     prompt: str
     generation_mode: str = "fast"
+    generation_quality: str = "complete"
     requested_stack: dict[str, str] = field(default_factory=dict)
     stack_selection_source: str = ""
     is_user_confirmed_stack: bool = False
@@ -60,6 +61,7 @@ class AgentWorkflowContext:
     file_tree: str = ""
     preview: dict[str, Any] = field(default_factory=dict)
     validation_findings: list[str] = field(default_factory=list)
+    contract_validation_findings: list[str] = field(default_factory=list)
     repaired_files: list[str] = field(default_factory=list)
     recommended_ide: str = ""
     alternative_ide: str = ""

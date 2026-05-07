@@ -7,6 +7,7 @@ from typing import Any, Mapping
 from app.agents.architecture_agent import ArchitectureAgent
 from app.agents.code_generation_agent import CodeGenerationAgent
 from app.agents.contract_agent import ContractAgent
+from app.agents.contract_validation_agent import ContractValidationAgent
 from app.agents.context import AgentWorkflowContext
 from app.agents.domain_module_extraction_agent import DomainModuleExtractionAgent
 from app.agents.file_planning_agent import FilePlanningAgent
@@ -33,6 +34,7 @@ class OrchestratorAgent:
         self.file_planning_agent = FilePlanningAgent()
         self.tool_recommendation_agent = ToolRecommendationAgent()
         self.contract_agent = ContractAgent()
+        self.contract_validation_agent = ContractValidationAgent()
         self.validation_agent = ValidationAgent()
         self.repair_agent = RepairAgent()
         self.packaging_agent = PackagingAgent(
@@ -52,6 +54,7 @@ class OrchestratorAgent:
         custom_files: list[dict[str, Any]] | None = None,
         files_to_remove: list[str] | None = None,
         chat_pending_corrections: list[dict[str, Any]] | None = None,
+        generation_quality: str = "complete",
     ) -> dict[str, Any]:
         source = stack_selection_source or str((selected_stack or {}).get("source") or "")
         confirmed = bool(
@@ -64,6 +67,7 @@ class OrchestratorAgent:
         context = AgentWorkflowContext(
             prompt=prompt,
             generation_mode=generation_mode,
+            generation_quality=generation_quality or "complete",
             requested_stack=ai.normalize_stack_selection(selected_stack),
             stack_selection_source=source,
             is_user_confirmed_stack=confirmed,
@@ -81,6 +85,7 @@ class OrchestratorAgent:
         context = self.domain_module_extraction_agent.run(context)
         context = self.file_planning_agent.run(context)
         context = self.contract_agent.run(context)
+        context = self.contract_validation_agent.run(context)
         context = await self.code_generation_agent.run(context)
         context = self.tool_recommendation_agent.run(context)
         context = self.packaging_agent.prepare_preview(context)
@@ -97,6 +102,7 @@ class OrchestratorAgent:
         context = AgentWorkflowContext(
             prompt=str(preview.get("problemStatement") or preview.get("summary") or preview.get("projectName") or ""),
             generation_mode="fast",
+            generation_quality=str(preview.get("generationQuality") or "complete"),
             requested_stack=ai.normalize_stack_selection(preview.get("selectedStack")),
             selected_stack=ai.normalize_stack_selection(preview.get("selectedStack")),
             declared_project_type=str(preview.get("projectType") or ""),

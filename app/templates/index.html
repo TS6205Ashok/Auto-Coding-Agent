@@ -1,20 +1,42 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Project Agent</title>
-  <link rel="stylesheet" href="/static/style.css">
-</head>
-<body>
+{% extends "base.html" %}
+
+{% block content %}
   <main class="page-shell">
     <section class="hero">
-      <p class="eyebrow">Project Agent</p>
+      {% include "partials/navbar.html" %}
       <h1>Agent-guided project architecture for runnable starter apps.</h1>
       <p class="hero-copy">
         Describe your idea, answer the agent questions one by one, then generate a runnable starter.
       </p>
     </section>
+
+    {% if answer %}
+    <section class="panel">
+      <div class="section-heading compact-heading">
+        <div>
+          <p class="section-label">{{ username | default("Project Agent") }}</p>
+          <h2>{{ question | default("Answer") }}</h2>
+        </div>
+      </div>
+      <p class="text-block">{{ answer }}</p>
+    </section>
+    {% endif %}
+
+    {% if messages %}
+    <section class="panel">
+      <div class="section-heading compact-heading">
+        <div>
+          <p class="section-label">Messages</p>
+          <h2>{{ username | default("Project Agent") }}</h2>
+        </div>
+      </div>
+      <div class="preview-grid">
+        {% for msg in messages %}
+          {% include "partials/message_card.html" %}
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
 
     <section class="panel compose-panel">
       <div class="section-heading">
@@ -36,7 +58,7 @@
 - I built a todo app in Node, rewrite it to FastAPI
 - Create an AI support dashboard and choose the best stack automatically
 - Generate a React + FastAPI starter for a customer portal with admin access"
-      ></textarea>
+      >{{ question | default("") }}</textarea>
 
       <div class="compose-grid">
         <label class="select-field">
@@ -103,7 +125,10 @@
           <li data-step="analyzed">StackAnalysisAgent detected the current stack</li>
           <li data-step="migrated">MigrationAgent planned the target stack</li>
           <li data-step="stack">ArchitectureAgent selected architecture and stack</li>
+          <li data-step="domain">DomainModuleExtractionAgent extracted domain files</li>
           <li data-step="planned">FilePlanningAgent planned files</li>
+          <li data-step="contract">ContractAgent built complete project contract</li>
+          <li data-step="contractValidated">ContractValidationAgent verified required files</li>
           <li data-step="generated">CodeGenerationAgent generated files</li>
           <li data-step="tools">ToolRecommendationAgent suggested IDE and tools</li>
           <li data-step="validated">ValidationAgent validated project</li>
@@ -195,6 +220,11 @@
         <article class="card wide">
           <h3>Required Runtime Inputs</h3>
           <p id="runtimeInputsSummaryText" class="text-block"></p>
+        </article>
+
+        <article class="card wide">
+          <h3>Missing File Status</h3>
+          <p id="validationStatusText" class="text-block"></p>
         </article>
 
         <article class="card wide">
@@ -336,7 +366,4 @@
 
     <button id="chatToggleButton" class="chat-toggle-button closed" type="button" aria-controls="chatPanel" aria-expanded="false">Chat</button>
   </main>
-
-  <script src="/static/app.js" defer></script>
-</body>
-</html>
+{% endblock %}

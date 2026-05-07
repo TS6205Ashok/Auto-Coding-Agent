@@ -130,6 +130,7 @@ class CodeGenerationAgent:
             "stackSelectionSource": context.stack_selection_source,
             "isUserConfirmedStack": context.is_user_confirmed_stack,
             "projectType": context.declared_project_type or context.project_kind.get("label", ""),
+            "generationQuality": context.generation_quality or "complete",
             "modules": context.modules,
             "packageRequirements": context.package_requirements,
             "installCommands": context.install_commands,
@@ -160,13 +161,34 @@ class CodeGenerationAgent:
             raw_preview["finalArchitecture"] = context.final_architecture.to_dict()
         if context.template_family:
             raw_preview["templateFamily"] = context.template_family
-        return ai.normalize_preview(
+        normalized = ai.normalize_preview(
             raw_preview,
             context.prompt,
             context.requested_stack,
             context.generation_mode,
             context.generation_context,
         )
+        return self._enforce_contract_files(context, normalized)
+
+    def _enforce_contract_files(self, context: AgentWorkflowContext, preview: dict[str, object]) -> dict[str, object]:
+        if context.project_contract is None:
+            return preview
+        repaired_files = ai.finalize_preview_files(
+            project_name=str(preview.get("projectName") or context.project_name or "Generated Project"),
+            selected_stack=context.selected_stack,
+            project_kind=context.project_kind,
+            required_inputs=context.required_inputs,
+            custom_manifest=context.custom_manifest,
+            template_family=context.template_family,
+            raw_files=preview.get("files", []),
+            project_contract=context.project_contract.to_dict(),
+        )
+        preview["files"] = repaired_files
+        preview["fileTree"] = ai.build_preview_file_tree(
+            repaired_files,
+            include_env_example=bool(preview.get("envVariables")),
+        )
+        return preview
 
     def _apply_fallback_assumptions(
         self,

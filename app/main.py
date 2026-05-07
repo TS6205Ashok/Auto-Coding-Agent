@@ -75,6 +75,7 @@ class SuggestRequest(BaseModel):
     stackSelectionSource: str = ""
     isUserConfirmedStack: bool = False
     generationMode: str = "fast"
+    generationQuality: str = "complete"
     finalRequirements: str = ""
     customFiles: list[RequestedFilePayload] = Field(default_factory=list)
     requestedFiles: list[RequestedFilePayload] = Field(default_factory=list)
@@ -184,6 +185,7 @@ class PreviewPayload(BaseModel):
     chatPendingCorrections: list[dict[str, Any]] = Field(default_factory=list)
     projectContract: dict[str, Any] = Field(default_factory=dict)
     validationStatus: dict[str, Any] = Field(default_factory=dict)
+    generationQuality: str = "complete"
 
 
 class ZipRequest(BaseModel):
@@ -195,7 +197,14 @@ async def index(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request=request,
         name="index.html",
-        context={"request": request},
+        context={
+            "request": request,
+            "title": "Project Agent",
+            "question": "",
+            "answer": "",
+            "username": "",
+            "messages": [],
+        },
     )
 
 
@@ -209,6 +218,7 @@ async def suggest_project(payload: SuggestRequest) -> JSONResponse:
         preview = await agent_controller.build_preview(
             idea,
             generation_mode=payload.generationMode,
+            generation_quality=payload.generationQuality or "complete",
             selected_stack=payload.selectedStack.model_dump() if payload.selectedStack else None,
             stack_selection_source=payload.stackSelectionSource,
             is_user_confirmed_stack=payload.isUserConfirmedStack,

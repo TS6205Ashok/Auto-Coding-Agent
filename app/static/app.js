@@ -57,6 +57,7 @@ const mainFileText = document.getElementById("mainFileText");
 const runMethodText = document.getElementById("runMethodText");
 const localUrlText = document.getElementById("localUrlText");
 const runtimeInputsSummaryText = document.getElementById("runtimeInputsSummaryText");
+const validationStatusText = document.getElementById("validationStatusText");
 const modulesList = document.getElementById("modulesList");
 const fileTreeBlock = document.getElementById("fileTreeBlock");
 const filesList = document.getElementById("filesList");
@@ -113,7 +114,10 @@ let agentActivityState = {
   analyzed: "pending",
   migrated: "pending",
   stack: "pending",
+  domain: "pending",
   planned: "pending",
+  contract: "pending",
+  contractValidated: "pending",
   generated: "pending",
   tools: "pending",
   validated: "pending",
@@ -314,7 +318,10 @@ function resetAgentActivity() {
     analyzed: "pending",
     migrated: "pending",
     stack: "pending",
+    domain: "pending",
     planned: "pending",
+    contract: "pending",
+    contractValidated: "pending",
     generated: "pending",
     tools: "pending",
     validated: "pending",
@@ -423,7 +430,10 @@ async function handleGenerateImmediately() {
     analyzed: "done",
     migrated: "done",
     stack: "done",
+    domain: "done",
     planned: "done",
+    contract: "done",
+    contractValidated: "done",
     generated: "current",
   });
   setBusy(true, "Generating runnable starter project...");
@@ -1143,6 +1153,7 @@ async function requestPreview(body) {
     },
     body: JSON.stringify({
       generationMode: generationModeSelect.value || "fast",
+      generationQuality: "complete",
       ...body,
       selectedStack: stackSelection,
       customFiles,
@@ -1547,6 +1558,9 @@ function renderPreview(preview) {
     understood: "done",
     stack: "done",
     planned: "done",
+    domain: "done",
+    contract: "done",
+    contractValidated: "done",
     generated: "done",
     validated: "done",
     repaired: "done",
@@ -1584,6 +1598,21 @@ function renderRuntimeSummary(preview) {
   runtimeInputsSummaryText.textContent = requiredInputs.length
     ? `${requiredInputs.length} runtime input${requiredInputs.length === 1 ? "" : "s"} required before or during startup.`
     : "No required runtime inputs are needed for this project.";
+  renderValidationStatus(preview.validationStatus || {});
+}
+
+function renderValidationStatus(validationStatus) {
+  if (!validationStatusText) {
+    return;
+  }
+  const missingFiles = Array.isArray(validationStatus.missingFiles) ? validationStatus.missingFiles : [];
+  if (validationStatus.valid && missingFiles.length === 0) {
+    validationStatusText.textContent = `No missing required files. ${validationStatus.generatedFileCount || 0} generated file(s), ${validationStatus.contractRequiredFileCount || 0} contract-required file(s).`;
+    return;
+  }
+  validationStatusText.textContent = missingFiles.length
+    ? `Missing required files: ${missingFiles.join(", ")}`
+    : "Validation is still reporting issues. Review the validation findings before creating a ZIP.";
 }
 
 function renderToolRecommendations(preview) {

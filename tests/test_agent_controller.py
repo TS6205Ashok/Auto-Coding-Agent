@@ -1629,6 +1629,7 @@ class AgentControllerTests(unittest.TestCase):
 
         self.assertEqual(contract.get("project_type"), "banking_chatbot")
         self.assertTrue(preview.get("validationStatus", {}).get("valid"), preview.get("validationStatus"))
+        self.assertEqual(preview.get("validationStatus", {}).get("missingFiles"), [])
         self.assertTrue(expected_paths.issubset(file_map))
         self.assertTrue(expected_paths.issubset(set(contract.get("required_files", []))))
         module_names = {item.get("name") for item in preview.get("modules", [])}
@@ -1681,6 +1682,7 @@ class AgentControllerTests(unittest.TestCase):
         file_map = {item["path"]: item["content"] for item in repaired.get("files", [])}
 
         self.assertTrue(repaired.get("validationStatus", {}).get("valid"), repaired.get("validationStatus"))
+        self.assertEqual(repaired.get("validationStatus", {}).get("missingFiles"), [])
         self.assertIn("backend/app/services/banking_service.py", file_map)
         self.assertIn("frontend/src/components/ChatWindow.jsx", file_map)
         self.assertIn("dummy_customers.json", file_map["backend/app/services/banking_service.py"])
@@ -1688,9 +1690,21 @@ class AgentControllerTests(unittest.TestCase):
 
     def test_chat_static_ui_contract_for_popup_actions(self) -> None:
         template = Path("app/templates/index.html").read_text(encoding="utf-8")
+        base_template = Path("app/templates/base.html").read_text(encoding="utf-8")
         script = Path("app/static/app.js").read_text(encoding="utf-8")
         styles = Path("app/static/style.css").read_text(encoding="utf-8")
 
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        rendered = response.text
+        self.assertIn('{% extends "base.html" %}', template)
+        self.assertIn('{% include "partials/navbar.html" %}', template)
+        self.assertIn("{% if answer %}", template)
+        self.assertIn("{% if messages %}", template)
+        self.assertIn("{% for msg in messages %}", template)
+        self.assertIn('{{ title | default("Project Agent") }}', base_template)
+        for marker in ["ideaInput", "generationModeSelect", "agentActivityPanel", "previewSection", "chatPanel"]:
+            self.assertIn(marker, rendered)
         for marker in ["chatToggleButton", "chatPanel", "chatCloseButton", "chatMessages", "chatActionBar", "chatInput", "chatSendButton"]:
             self.assertIn(marker, template)
         for function_name in [
@@ -1715,6 +1729,9 @@ class AgentControllerTests(unittest.TestCase):
         self.assertIn('chatPanel.classList.add("open", "is-open")', script)
         self.assertIn('chatToggleButton.classList.add("closed")', script)
         self.assertIn("@keyframes chatPulse", styles)
+        self.assertIn('generationQuality: "complete"', script)
+        self.assertIn("ContractValidationAgent verified required files", template)
+        self.assertIn("No missing required files", script)
 
     def test_preview_includes_project_contract_and_validation_status(self) -> None:
         response = self.client.post(
@@ -1740,6 +1757,8 @@ class AgentControllerTests(unittest.TestCase):
 
         self.assertTrue(contract)
         self.assertTrue(validation_status.get("valid"))
+        self.assertEqual(validation_status.get("missingFiles"), [])
+        self.assertGreater(validation_status.get("contractRequiredFileCount", 0), 0)
         self.assertIn("backend/app/routers/health.py", contract["required_files"])
         self.assertIn("backend/app/services/app_service.py", contract["required_files"])
         self.assertTrue(set(contract["required_files"]).issubset(file_paths))
@@ -1789,6 +1808,71 @@ class AgentControllerTests(unittest.TestCase):
         contract_required = set(preview["projectContract"]["required_files"])
         self.assertTrue(requested_paths.issubset(file_paths))
         self.assertTrue(requested_paths.issubset(contract_required))
+        self.assertEqual(preview["validationStatus"]["missingFiles"], [])
+
+    def test_generation_quality_complete_and_contract_missing_file_status(self) -> None:
+        response = self.client.post(
+            "/api/suggest",
+            json={
+                "idea": "Build an admin dashboard with reports and payment email notifications",
+                "generationMode": "fast",
+                "generationQuality": "complete",
+                "selectedStack": {
+                    "language": "Python",
+                    "frontend": "React",
+                    "backend": "FastAPI",
+                    "database": "SQLite",
+                    "aiTools": "None",
+                    "deployment": "Render",
+                },
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        preview = response.json()
+        file_paths = {item["path"] for item in preview.get("files", [])}
+        required_paths = set(preview["projectContract"]["required_files"])
+
+        self.assertEqual(preview["generationQuality"], "complete")
+        self.assertEqual(preview["validationStatus"]["missingFiles"], [])
+        self.assertTrue(preview["validationStatus"]["valid"])
+        for expected_path in [
+            "frontend/src/pages/AdminDashboard.jsx",
+            "backend/app/routers/admin.py",
+            "backend/app/services/admin_service.py",
+            "frontend/src/pages/ReportPage.jsx",
+            "backend/app/routers/reports.py",
+            "backend/app/services/report_service.py",
+            "frontend/src/pages/PaymentPage.jsx",
+            "backend/app/services/email_service.py",
+        ]:
+            self.assertIn(expected_path, file_paths)
+            self.assertIn(expected_path, required_paths)
+
+    def test_zip_gate_rejects_unrepairable_missing_contract_file(self) -> None:
+        preview = {
+            "projectName": "Broken Contract",
+            "problemStatement": "Build a todo API",
+            "summary": "Broken preview",
+            "selectedStack": {
+                "language": "Python",
+                "frontend": "None",
+                "backend": "FastAPI",
+                "database": "SQLite",
+                "aiTools": "None",
+                "deployment": "Render",
+            },
+            "projectContract": {
+                "project_type": "api",
+                "required_files": ["backend/pom.xml"],
+                "forbidden_files": ["backend/pom.xml"],
+                "files_to_remove": [],
+            },
+            "files": [],
+            "requiredInputs": [],
+            "envVariables": [],
+        }
+        response = self.client.post("/api/zip", json={"preview": preview})
+        self.assertEqual(response.status_code, 400)
 
 
 if __name__ == "__main__":

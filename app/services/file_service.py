@@ -2331,6 +2331,24 @@ def _contract_removed_paths(project_contract: Mapping[str, Any] | None) -> list[
     return sorted(paths)
 
 
+def contract_required_paths(project_contract: Mapping[str, Any] | None) -> list[str]:
+    return _contract_required_paths(project_contract)
+
+
+def missing_contract_files(
+    files: Sequence[Mapping[str, Any]],
+    project_contract: Mapping[str, Any] | None,
+) -> list[str]:
+    if not isinstance(project_contract, Mapping):
+        return []
+    file_paths = {
+        str(item.get("path") or "").strip()
+        for item in files
+        if isinstance(item, Mapping) and str(item.get("path") or "").strip()
+    }
+    return sorted(set(_contract_required_paths(project_contract)) - file_paths)
+
+
 def _apply_domain_integrations(merged: dict[str, str], project_contract: Mapping[str, Any], project_name: str) -> None:
     if str(project_contract.get("project_type") or project_contract.get("projectType") or "") != "banking_chatbot":
         return

@@ -22,6 +22,7 @@ class DomainModuleExtractionAgent:
         ).lower()
         if self._is_banking_chatbot(description):
             self._apply_banking_chatbot_profile(context)
+        self._apply_general_domain_files(context, description)
         logger.info(
             "DomainModuleExtractionAgent extracted domain=%s files=%s modules=%s",
             context.domain_project_type or "generic",
@@ -120,3 +121,77 @@ class DomainModuleExtractionAgent:
             {"path": "frontend/src/components/MessageBubble.jsx", "purpose": "User and bot message bubble component."},
             {"path": "frontend/src/services/chatbotApi.js", "purpose": "Frontend API client for the chat endpoint."},
         ]
+
+    def _apply_general_domain_files(self, context: AgentWorkflowContext, text: str) -> None:
+        additions: list[dict[str, str]] = []
+        modules: list[dict[str, object]] = []
+        has_backend = bool(context.project_kind.get("hasBackend"))
+        has_frontend = bool(context.project_kind.get("hasFrontend"))
+
+        def add(path: str, purpose: str) -> None:
+            additions.append({"path": path, "purpose": purpose})
+
+        def module(name: str, purpose: str, paths: list[str]) -> None:
+            modules.append({"name": name, "purpose": purpose, "keyFiles": paths})
+
+        if "chatbot" in text and context.domain_project_type != "banking_chatbot":
+            paths = []
+            if has_backend:
+                paths.extend(["backend/app/routers/chatbot.py", "backend/app/services/chatbot_service.py"])
+            if has_frontend:
+                paths.extend([
+                    "frontend/src/pages/ChatbotPage.jsx",
+                    "frontend/src/components/ChatWindow.jsx",
+                    "frontend/src/services/chatbotApi.js",
+                ])
+            if paths:
+                for path in paths:
+                    add(path, "Chatbot conversation workflow file.")
+                module("Chatbot Module", "Handles chat messages and the frontend conversation UI.", paths)
+
+        feature_map = [
+            (("admin", "administrator"), "Admin", "admin", "AdminDashboard", "Admin management dashboard and APIs."),
+            (("report", "analytics"), "Reports", "reports", "ReportPage", "Reporting workflow and APIs."),
+            (("payment", "checkout", "subscription"), "Payments", "payments", "PaymentPage", "Payment workflow and APIs."),
+            (("complaint",), "Complaints", "complaints", "ComplaintPage", "Complaint tracking workflow and APIs."),
+            (("transaction", "transactions"), "Transactions", "transactions", "TransactionsPage", "Transaction lookup workflow and APIs."),
+            (("loan", "emi"), "Loans", "loans", "LoanPage", "Loan and EMI workflow and APIs."),
+            (("branch", "atm", "location"), "Locations", "locations", "LocationsPage", "Branch and ATM location workflow and APIs."),
+            (("inventory", "stock"), "Inventory", "inventory", "InventoryPage", "Inventory workflow and APIs."),
+            (("login", "auth", "authentication"), "Auth", "auth", "LoginPage", "Authentication workflow and APIs."),
+            (("profile",), "Profile", "profile", "ProfilePage", "Customer profile workflow and APIs."),
+            (("upload", "file upload"), "Uploads", "uploads", "UploadPage", "File upload workflow and APIs."),
+            (("search",), "Search", "search", "SearchPage", "Search workflow and APIs."),
+        ]
+        for keywords, name, slug, page, purpose in feature_map:
+            if not any(keyword in text for keyword in keywords):
+                continue
+            paths = []
+            if has_backend:
+                paths.extend([
+                    f"backend/app/routers/{slug}.py",
+                    f"backend/app/services/{slug.rstrip('s')}_service.py",
+                ])
+            if has_frontend:
+                paths.append(f"frontend/src/pages/{page}.jsx")
+            if not paths:
+                continue
+            for path in paths:
+                add(path, purpose)
+            module(f"{name} Module", purpose, paths)
+
+        if has_backend and ("intent detection" in text or "intent" in text):
+            add("backend/app/services/intent_service.py", "Intent detection service for routing user requests.")
+        if has_backend and "otp" in text:
+            add("backend/app/services/otp_service.py", "OTP verification helper for secure workflows.")
+        if has_backend and ("email" in text or "smtp" in text):
+            add("backend/app/services/email_service.py", "Email and SMTP notification service.")
+
+        existing_paths = {item.get("path") for item in context.domain_required_files}
+        context.domain_required_files.extend(
+            item for item in additions if item.get("path") and item.get("path") not in existing_paths
+        )
+        existing_modules = {item.get("name") for item in context.domain_modules}
+        context.domain_modules.extend(
+            item for item in modules if item.get("name") and item.get("name") not in existing_modules
+        )
