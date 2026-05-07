@@ -130,6 +130,16 @@ class FilePlanningAgent:
         context.custom_manifest = ai.dedupe_manifest(
             [*context.custom_manifest, *context.domain_required_files]
         )
+        context.custom_manifest = [
+            item
+            for item in context.custom_manifest
+            if item.get("path")
+            and ai.custom_manifest_path_allowed(
+                item["path"],
+                context.selected_stack,
+                context.project_kind,
+            )
+        ]
         removed_paths = set(ai.normalize_removed_paths(raw.get("filesToRemove") or context.files_to_remove))
         context.files_to_remove = sorted(removed_paths)
         context.custom_manifest = [

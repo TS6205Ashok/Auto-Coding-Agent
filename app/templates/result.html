@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <main class="page-shell">
+    <section class="hero">
+      <p class="eyebrow">Project Agent</p>
+      <h1>{{ project_name }} is ready.</h1>
+      <p class="hero-copy">Your generated project was saved and can now be opened in a real browser VS Code IDE.</p>
+    </section>
+
+    <section class="panel download-panel">
+      <div class="section-heading">
+        <div>
+          <p class="section-label">Generated Project</p>
+          <h2>Choose your next step</h2>
+        </div>
+        <p class="section-note">Project ID: {{ project_id }}</p>
+      </div>
+      <div class="download-actions">
+        <a class="download-link" href="{{ ide_url }}">Open in IDE</a>
+        <a class="download-link" href="{{ download_url }}" download>Download ZIP</a>
+      </div>
+    </section>
+  </main>
+{% endblock %}

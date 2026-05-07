@@ -2330,6 +2330,12 @@ def normalize_custom_manifest(
                 continue
             manifest.append({"path": path, "purpose": purpose})
 
+    manifest = [
+        item
+        for item in manifest
+        if _custom_path_allowed_for_project_scope(item["path"], selected_stack, project_kind)
+    ]
+
     if manifest:
         return dedupe_manifest(manifest)
 
@@ -2394,6 +2400,58 @@ def normalize_custom_manifest(
                 }
             )
     return defaults[:MAX_CUSTOM_FILES]
+
+
+def _custom_path_allowed_for_project_scope(
+    path: str,
+    selected_stack: Mapping[str, str],
+    project_kind: Mapping[str, Any],
+) -> bool:
+    normalized = path.replace("\\", "/").strip("/")
+    lowered = normalized.lower()
+    backend = str(selected_stack.get("backend") or "")
+    frontend = str(selected_stack.get("frontend") or "")
+    has_backend = bool(project_kind.get("hasBackend")) and backend not in NONE_LIKE
+    has_frontend = bool(project_kind.get("hasFrontend")) and frontend not in NONE_LIKE
+
+    if not has_backend:
+        backend_markers = (
+            "backend/",
+            "app/routers/",
+            "app/routes/",
+            "app/controllers/",
+            "app/services/",
+            "frontend/src/services/",
+            "src/routes/",
+            "src/controllers/",
+            "src/services/",
+            "src/main/java/",
+        )
+        backend_files = (
+            "requirements.txt",
+            "pom.xml",
+            "server.js",
+            "app/main.py",
+            "main.py",
+        )
+        if lowered.startswith(backend_markers) or lowered in backend_files or lowered.endswith(".py") or lowered.endswith(".java"):
+            return False
+
+    if not has_frontend:
+        frontend_markers = ("frontend/", "src/pages/", "src/components/", "src/views/")
+        frontend_extensions = (".jsx", ".tsx", ".html", ".css")
+        if lowered.startswith(frontend_markers) or lowered.endswith(frontend_extensions):
+            return False
+
+    return True
+
+
+def custom_manifest_path_allowed(
+    path: str,
+    selected_stack: Mapping[str, str],
+    project_kind: Mapping[str, Any],
+) -> bool:
+    return _custom_path_allowed_for_project_scope(path, selected_stack, project_kind)
 
 
 def normalize_removed_paths(value: Any) -> list[str]:

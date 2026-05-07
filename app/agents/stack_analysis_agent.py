@@ -28,12 +28,7 @@ class StackAnalysisAgent:
         context.source_framework = source_framework
         context.source_project_type = source_project_type
         context.source_architecture_pattern = architecture_pattern
-        context.migration_active = bool(
-            context.migration_requested
-            or source_language
-            or source_framework
-            or self._looks_like_code(text)
-        )
+        context.migration_active = bool(context.migration_requested or self._looks_like_code(text))
 
         logger.info(
             "StackAnalysisAgent detected source language=%s framework=%s project_type=%s architecture=%s migration_active=%s",
@@ -48,10 +43,10 @@ class StackAnalysisAgent:
     def _detect_source_language(self, lowered: str) -> str:
         mapping = [
             ("C++", ("main.cpp", "std::", "#include <", "using namespace std", "cout <<", "c++")),
-            ("Java", ("spring boot", "pom.xml", "@springbootapplication", "public static void main", "java")),
-            ("Python", ("fastapi", "flask", "requirements.txt", "def ", "import os", "python")),
             ("JavaScript", ("package.json", "server.js", "express", "react", "const ", "function ", "javascript", "node")),
             ("TypeScript", ("tsconfig.json", "typescript", "interface ", ": string", "next.js", "nestjs")),
+            ("Java", ("spring boot", "pom.xml", "@springbootapplication", "public static void main", "java")),
+            ("Python", ("fastapi", "flask", "requirements.txt", "def ", "import os", "python")),
         ]
         for language, tokens in mapping:
             if any(token in lowered for token in tokens):

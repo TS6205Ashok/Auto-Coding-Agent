@@ -11,9 +11,14 @@ from .file_service import (
     sanitize_relative_path,
     slugify,
 )
+from .ide_service import materialize_preview_workspace
 
 
-def create_project_zip(preview: dict[str, Any], generated_dir: Path) -> dict[str, str]:
+def create_project_zip(
+    preview: dict[str, Any],
+    generated_dir: Path,
+    generated_projects_dir: Path | None = None,
+) -> dict[str, str]:
     generated_dir.mkdir(parents=True, exist_ok=True)
 
     project_name = str(preview.get("projectName") or "Generated Project")
@@ -26,6 +31,11 @@ def create_project_zip(preview: dict[str, Any], generated_dir: Path) -> dict[str
     project_dir.mkdir(parents=True, exist_ok=False)
 
     _write_project_source_files(project_dir, preview)
+    workspace_info = (
+        materialize_preview_workspace(preview, generated_projects_dir)
+        if generated_projects_dir is not None
+        else {}
+    )
 
     zip_path = generated_dir / f"{bundle_name}.zip"
     with ZipFile(zip_path, "w", compression=ZIP_DEFLATED) as zip_file:
@@ -37,6 +47,7 @@ def create_project_zip(preview: dict[str, Any], generated_dir: Path) -> dict[str
     return {
         "filename": zip_path.name,
         "downloadUrl": f"/downloads/{zip_path.name}",
+        **workspace_info,
     }
 
 

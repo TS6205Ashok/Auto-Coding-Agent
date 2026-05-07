@@ -30,10 +30,19 @@ CHAT_ACTIONS = {
     "cancel_pending_change",
 }
 
+CHAT_INTENTS = {
+    "chat_intent",
+    "planning_intent",
+    "generation_intent",
+    "repair_intent",
+    "ide_intent",
+}
+
 
 @dataclass(slots=True)
 class ChatCoordinatorResult:
     reply: str
+    intent: str = "chat_intent"
     action: str = "none"
     updatedIdea: str = ""
     updatedRequirements: str = ""
@@ -53,6 +62,8 @@ class ChatCoordinatorResult:
 
     def to_api_dict(self) -> dict[str, Any]:
         payload = asdict(self)
+        if payload["intent"] not in CHAT_INTENTS:
+            payload["intent"] = "chat_intent"
         if payload["action"] not in CHAT_ACTIONS:
             payload["action"] = "none"
         if not payload["reply"]:
@@ -181,16 +192,19 @@ class ChatCoordinatorAgent:
         }
         return (
             "You are a ChatGPT-like project co-pilot connected to a software project generation agent. "
-            "Your job is to discuss project ideas, improve requirements, and return structured actions. "
-            "You can add files, remove files, add features, remove features, change stack, and request regeneration. "
+            "Your first job is conversation: answer questions, explain technologies, discuss architecture, "
+            "suggest stacks, ask follow-up questions, and draft project plans in markdown. "
+            "The project pipeline is separate and must run only for strict explicit generation intent. "
             "Do not generate final project files directly. Always return strict JSON. "
-            "If the user wants a project created, return action generate_project. "
-            "If the user wants modification, return action add_files/remove_files/add_feature/remove_feature/change_stack. "
-            "Ask confirmation for project-changing actions. Never require paid APIs for chatbot behavior.\n\n"
+            "Set intent to one of: chat_intent, planning_intent, generation_intent, repair_intent, ide_intent. "
+            "Only set generation_intent/action generate_project when the user explicitly says generate project, "
+            "generate this, create files, build starter, build it now, or confirm and generate. "
+            "Normal project ideas, questions, stack suggestions, and plans are planning_intent or chat_intent. "
+            "Preview modifications are repair_intent and require confirmation. Never require paid APIs for chatbot behavior.\n\n"
             "Allowed actions: none, update_idea, update_requirements, generate_project, regenerate_project, "
             "add_files, remove_files, add_feature, remove_feature, change_stack, update_required_inputs, "
             "pause_agent_and_update, cancel_pending_change.\n"
-            "Return fields: reply, action, updatedIdea, updatedRequirements, requestedFiles, filesToRemove, "
+            "Return fields: reply, intent, action, updatedIdea, updatedRequirements, requestedFiles, filesToRemove, "
             "featuresToAdd, featuresToRemove, updatedStack, requiredInputs, needsConfirmation, "
             "confirmationMessage, shouldGenerate, shouldRegenerate, shouldPauseAgent, confidence.\n\n"
             f"STATE:\n{json.dumps(state, indent=2)}"
@@ -199,6 +213,7 @@ class ChatCoordinatorAgent:
     def _normalize_result(self, payload: Mapping[str, Any], *, llm_mode_used: str) -> ChatCoordinatorResult:
         result = ChatCoordinatorResult(
             reply=str(payload.get("reply") or "").strip(),
+            intent=str(payload.get("intent") or "chat_intent").strip(),
             action=str(payload.get("action") or "none").strip(),
             updatedIdea=str(payload.get("updatedIdea") or "").strip(),
             updatedRequirements=str(payload.get("updatedRequirements") or "").strip(),
@@ -218,6 +233,18 @@ class ChatCoordinatorAgent:
         )
         if result.action not in CHAT_ACTIONS:
             result.action = "none"
+        if result.intent not in CHAT_INTENTS:
+            result.intent = self._intent_for_action(result.action, result.shouldGenerate, result.shouldRegenerate)
+        if result.intent != "generation_intent" and result.shouldGenerate:
+            result.shouldGenerate = False
+        if result.intent not in {"repair_intent", "generation_intent"} and result.shouldRegenerate:
+            result.shouldRegenerate = False
+        if result.intent in {"chat_intent", "planning_intent", "ide_intent"}:
+            result.requestedFiles = []
+            result.filesToRemove = []
+            result.featuresToAdd = []
+            result.featuresToRemove = []
+            result.requiredInputs = []
         return result
 
     def _rule_based(
@@ -239,7 +266,43 @@ class ChatCoordinatorAgent:
         if any(word in lowered for word in ["cancel", "discard", "never mind", "nevermind"]):
             return ChatCoordinatorResult(
                 reply="Okay, I canceled the pending chat suggestion. I did not change the project state.",
+                intent="chat_intent",
                 action="cancel_pending_change",
+                confidence="high",
+            )
+
+        if self._looks_like_ide_intent(lowered):
+            return ChatCoordinatorResult(
+                reply=self._ide_reply(lowered, has_preview),
+                intent="ide_intent",
+                action="none",
+                confidence="high",
+            )
+
+        required_inputs = self._detect_required_inputs(lowered)
+        if self._looks_like_generation_intent(lowered):
+            idea = current_idea or message
+            return ChatCoordinatorResult(
+                reply=(
+                    "Ready to generate. I will only start the project pipeline after you confirm, "
+                    "then I will build a fresh contract from the current description and selected stack."
+                ),
+                intent="generation_intent",
+                action="generate_project",
+                updatedIdea=idea,
+                updatedRequirements=self._draft_requirements(idea),
+                requiredInputs=required_inputs,
+                needsConfirmation=True,
+                confirmationMessage="Generate this project now?",
+                shouldGenerate=True,
+                confidence="high",
+            )
+
+        if self._looks_like_explanation_question(lowered):
+            return ChatCoordinatorResult(
+                reply=self._answer_general_question(message, lowered, normalized_stack),
+                intent="chat_intent",
+                action="none",
                 confidence="high",
             )
 
@@ -254,23 +317,27 @@ class ChatCoordinatorAgent:
                 }
             )
             return ChatCoordinatorResult(
-                reply=f"I detected a stack change to {updated_stack.get('language')} / {updated_stack.get('backend')}.",
+                reply=self._stack_change_reply(updated_stack, has_preview),
+                intent="repair_intent" if has_preview else "planning_intent",
                 action="change_stack",
                 updatedStack=updated_stack,
                 needsConfirmation=True,
-                confirmationMessage="Apply this stack change and regenerate the project?",
+                confirmationMessage="Apply this stack change?" + (" Regenerate the preview after applying it?" if has_preview else ""),
                 shouldRegenerate=has_preview,
                 confidence="high",
             )
 
-        required_inputs = self._detect_required_inputs(lowered)
         requested_files = self._detect_requested_files(lowered, normalized_stack)
         files_to_remove = self._detect_files_to_remove(lowered, current_preview, normalized_stack)
         features_to_add = self._detect_features_to_add(lowered)
         features_to_remove = self._detect_features_to_remove(lowered)
         if not requested_files and not has_preview and self._looks_like_file_request(lowered):
             return ChatCoordinatorResult(
-                reply="I can add that file, but I need a selected stack or generated preview first so I can choose the correct path.",
+                reply=(
+                    "I can talk through that file, but I will not create or validate project files until you ask me to generate. "
+                    "If you want, I can first outline where it would fit in the project."
+                ),
+                intent="planning_intent",
                 action="none",
                 confidence="medium",
             )
@@ -285,6 +352,7 @@ class ChatCoordinatorAgent:
         if mode_running and looks_like_change:
             return ChatCoordinatorResult(
                 reply="I captured that correction and will apply it to the current generation before the final preview is accepted.",
+                intent="repair_intent",
                 action="pause_agent_and_update",
                 updatedRequirements=self._merge_requirements(current_idea, message),
                 requestedFiles=requested_files,
@@ -317,6 +385,7 @@ class ChatCoordinatorAgent:
                     features_to_add,
                     features_to_remove,
                 ),
+                intent="repair_intent",
                 action=action,
                 updatedRequirements=self._merge_requirements(current_idea or str(current_preview.get("problemStatement") or ""), message),
                 requestedFiles=requested_files,
@@ -330,33 +399,219 @@ class ChatCoordinatorAgent:
                 confidence="high",
             )
 
-        if any(phrase in lowered for phrase in ["generate this", "build it now", "create project", "finalize and generate", "generate project"]):
-            idea = current_idea or message
+        if self._looks_like_planning_intent(lowered):
+            draft = self._draft_requirements(message)
             return ChatCoordinatorResult(
-                reply="Ready. I will send this finalized project description through the Project Agent pipeline.",
-                action="generate_project",
-                updatedIdea=idea,
-                updatedRequirements=self._draft_requirements(idea),
+                reply=self._planning_reply(message, normalized_stack),
+                intent="planning_intent",
+                action="update_requirements",
+                updatedIdea=message,
+                updatedRequirements=draft,
                 requiredInputs=required_inputs,
-                needsConfirmation=True,
-                confirmationMessage="Generate this project through the Project Agent pipeline?",
-                shouldGenerate=True,
+                needsConfirmation=False,
                 confidence="high",
             )
 
-        draft = self._draft_requirements(message)
         return ChatCoordinatorResult(
-            reply=(
-                "Here is a stronger project direction I can use: "
-                f"{draft} Do you want to use this as the project description or add more details?"
-            ),
-            action="update_requirements",
-            updatedIdea=message,
-            updatedRequirements=draft,
+            reply=self._conversation_reply(message, normalized_stack, bool(current_idea), has_preview),
+            intent="chat_intent",
+            action="none",
             requiredInputs=required_inputs,
             needsConfirmation=False,
             confidence="medium",
         )
+
+    def _intent_for_action(self, action: str, should_generate: bool, should_regenerate: bool) -> str:
+        if should_generate or action == "generate_project":
+            return "generation_intent"
+        if should_regenerate or action in {
+            "regenerate_project",
+            "add_files",
+            "remove_files",
+            "add_feature",
+            "remove_feature",
+            "change_stack",
+            "update_required_inputs",
+            "pause_agent_and_update",
+        }:
+            return "repair_intent"
+        if action in {"update_idea", "update_requirements"}:
+            return "planning_intent"
+        return "chat_intent"
+
+    def _looks_like_generation_intent(self, lowered: str) -> bool:
+        phrases = [
+            "generate project",
+            "generate this",
+            "generate it",
+            "create files",
+            "create the files",
+            "build starter",
+            "build a starter",
+            "build it now",
+            "confirm and generate",
+            "finalize and generate",
+        ]
+        return any(phrase in lowered for phrase in phrases)
+
+    def _looks_like_ide_intent(self, lowered: str) -> bool:
+        return any(
+            phrase in lowered
+            for phrase in [
+                "open ide",
+                "open the ide",
+                "start ide",
+                "close ide",
+                "ide status",
+                "download zip",
+                "download project",
+                "create zip",
+                "package zip",
+            ]
+        )
+
+    def _looks_like_explanation_question(self, lowered: str) -> bool:
+        question_starters = ("what is", "what are", "why", "how does", "how do", "explain", "compare")
+        return lowered.endswith("?") or lowered.startswith(question_starters)
+
+    def _looks_like_planning_intent(self, lowered: str) -> bool:
+        planning_terms = [
+            "plan",
+            "suggest",
+            "recommend",
+            "architecture",
+            "stack",
+            "should i use",
+            "project idea",
+            "requirements",
+            "frontend-only",
+            "backend-only",
+            "full-stack",
+            "full stack",
+            "puzzle game",
+            "app",
+            "website",
+            "portal",
+            "dashboard",
+            "system",
+        ]
+        return any(term in lowered for term in planning_terms)
+
+    def _ide_reply(self, lowered: str, has_preview: bool) -> str:
+        if "close" in lowered:
+            return "Use the Close IDE control after a project workspace has been created. I will not touch the project pipeline for this."
+        if "download" in lowered or "zip" in lowered or "package" in lowered:
+            return (
+                "ZIP creation belongs to the packaging step. Generate and review a preview first, then use Create ZIP. "
+                "I will not run validation or packaging from a normal chat message."
+            )
+        if has_preview:
+            return "After you create the ZIP/workspace, use Open IDE to launch it. Chat itself will not trigger validation or generation."
+        return "There is no generated workspace to open yet. We can discuss or plan first, then generate only when you explicitly ask."
+
+    def _stack_change_reply(self, updated_stack: Mapping[str, Any], has_preview: bool) -> str:
+        stack_bits = [
+            str(updated_stack.get("language") or "Auto"),
+            str(updated_stack.get("frontend") or "Auto"),
+            str(updated_stack.get("backend") or "Auto"),
+            str(updated_stack.get("database") or "Auto"),
+        ]
+        suffix = " Because a preview exists, applying this is a repair/regeneration action." if has_preview else " I can stage this preference without generating files."
+        return f"I detected this stack preference: {' / '.join(stack_bits)}.{suffix}"
+
+    def _answer_general_question(self, message: str, lowered: str, selected_stack: Mapping[str, str]) -> str:
+        del message
+        if "fastapi" in lowered:
+            return (
+                "**FastAPI** is a Python web framework for building APIs. It is a good fit when you want typed request/response models, "
+                "automatic OpenAPI docs, and a straightforward backend for React or static frontends.\n\n"
+                "Use it when your project needs real backend routes, auth, persistence, or integrations. For frontend-only games or static tools, skip it."
+            )
+        if "react" in lowered and ("vanilla" in lowered or "html" in lowered or "javascript" in lowered):
+            return (
+                "**React vs vanilla JavaScript:**\n\n"
+                "- Use **React** for component-heavy apps, dashboards, routing, and stateful UI.\n"
+                "- Use **HTML/CSS/JavaScript** for small games, landing pages, simple widgets, and projects with no build step.\n\n"
+                f"Current selected frontend: `{selected_stack.get('frontend', 'Auto')}`."
+            )
+        if "backend" in lowered:
+            return (
+                "A backend is useful for data storage, authentication, server-side validation, scheduled work, and external API secrets. "
+                "If the app can run entirely in the browser and does not need protected data or server APIs, frontend-only is cleaner."
+            )
+        return (
+            "Happy to explain. I can answer questions, compare stack options, or help shape the project plan without starting generation. "
+            "Tell me the technology or decision you want to unpack."
+        )
+
+    def _planning_reply(self, message: str, selected_stack: Mapping[str, str]) -> str:
+        project_name = ai.clean_project_name(None, message)
+        suggested_stack = self._suggest_stack_for_text(message.lower(), selected_stack)
+        return (
+            f"## Project Plan: {project_name}\n\n"
+            "### Goal\n"
+            f"{message.strip()}\n\n"
+            "### Suggested Stack\n"
+            f"- Language: `{suggested_stack['language']}`\n"
+            f"- Frontend: `{suggested_stack['frontend']}`\n"
+            f"- Backend: `{suggested_stack['backend']}`\n"
+            f"- Database: `{suggested_stack['database']}`\n\n"
+            "### First Modules\n"
+            "- Core user workflow\n"
+            "- Polished starter UI\n"
+            "- Local setup and run instructions\n"
+            "- Validation-ready file structure once generation is confirmed\n\n"
+            "### Follow-up Questions\n"
+            "1. Should this be frontend-only, backend-only, or full-stack?\n"
+            "2. What is the most important user action?\n"
+            "3. Do you need persistence, login, or external APIs?\n\n"
+            "I will not generate files until you explicitly say `generate project`, `create files`, or `build starter`."
+        )
+
+    def _conversation_reply(
+        self,
+        message: str,
+        selected_stack: Mapping[str, str],
+        has_idea: bool,
+        has_preview: bool,
+    ) -> str:
+        context_note = "I have a preview in context." if has_preview else ("I have the current idea in context." if has_idea else "No project is locked in yet.")
+        return (
+            f"{context_note} I can help discuss, plan, compare stacks, or answer questions without running the generator.\n\n"
+            f"You said: {message}\n\n"
+            f"Current stack signal: `{selected_stack.get('language', 'Auto')}` / `{selected_stack.get('frontend', 'Auto')}` / `{selected_stack.get('backend', 'Auto')}`."
+        )
+
+    def _suggest_stack_for_text(self, lowered: str, selected_stack: Mapping[str, str]) -> dict[str, str]:
+        stack = ai.normalize_stack_selection(selected_stack)
+        if "puzzle" in lowered or "game" in lowered or "frontend-only" in lowered:
+            return {
+                "language": "JavaScript",
+                "frontend": "HTML/CSS/JavaScript",
+                "backend": "None",
+                "database": "None",
+                "aiTools": "None",
+                "deployment": "None",
+            }
+        if "api" in lowered or "backend" in lowered:
+            return {
+                "language": "Python",
+                "frontend": "None",
+                "backend": "FastAPI",
+                "database": "SQLite",
+                "aiTools": "None",
+                "deployment": "Render",
+            }
+        if any(value not in {"", "Auto"} for value in stack.values()):
+            return stack
+        return {
+            "language": "Python",
+            "frontend": "React",
+            "backend": "FastAPI",
+            "database": "SQLite",
+            "aiTools": "None",
+            "deployment": "Render",
+        }
 
     def _detect_stack_change(self, lowered: str, selected_stack: Mapping[str, str]) -> tuple[dict[str, Any], str]:
         stack = dict(selected_stack)
@@ -521,11 +776,11 @@ class ChatCoordinatorAgent:
 
     def _looks_like_project_action(self, lowered: str) -> bool:
         return (
-            self._looks_like_file_request(lowered)
+            self._looks_like_generation_intent(lowered)
+            or self._looks_like_file_request(lowered)
             or self._looks_like_remove_request(lowered)
             or "change backend" in lowered
             or "spring boot" in lowered
-            or "generate" in lowered
         )
 
     def _detect_features_to_add(self, lowered: str) -> list[str]:

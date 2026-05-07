@@ -1,0 +1,38 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Install Dependencies",
+      "type": "shell",
+      "command": "./setup.sh",
+      "windows": {
+        "command": ".\\setup.bat"
+      },
+      "detail": "Project Agent Generated Starter v1 | Main file: index.html",
+      "problemMatcher": [],
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "Run Project",
+      "type": "shell",
+      "command": "./run.sh",
+      "windows": {
+        "command": ".\\run.bat"
+      },
+      "detail": "Project Agent Generated Starter v1 | Run command: Open index.html directly in a browser",
+      "problemMatcher": [],
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    }
+  ]
+}

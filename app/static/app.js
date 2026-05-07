@@ -63,6 +63,8 @@ const fileTreeBlock = document.getElementById("fileTreeBlock");
 const filesList = document.getElementById("filesList");
 const downloadText = document.getElementById("downloadText");
 const downloadLink = document.getElementById("downloadLink");
+const openIdeLink = document.getElementById("openIdeLink");
+const closeIdeButton = document.getElementById("closeIdeButton");
 const chatPanel = document.getElementById("chatPanel");
 const chatToggleButton = document.getElementById("chatToggleButton");
 const chatCloseButton = document.getElementById("chatCloseButton");
@@ -86,6 +88,7 @@ let agentAnalysis = null;
 let agentAnswers = {};
 let finalRequirements = "";
 let currentPreview = null;
+let currentProjectId = "";
 let selectedStack = getDefaultStackState();
 let suggestedStack = getDefaultStackState();
 let currentStackSelection = createCurrentStackSelection(getDefaultStackState(), {
@@ -137,6 +140,7 @@ skipQuestionsButton.addEventListener("click", handleSkipQuestions);
 generateProjectButton.addEventListener("click", handleGenerateProject);
 regenerateButton.addEventListener("click", handleRegenerate);
 confirmButton.addEventListener("click", handleConfirmZip);
+closeIdeButton.addEventListener("click", handleCloseIde);
 clearButton.addEventListener("click", resetAll);
 chatToggleButton.addEventListener("click", toggleChatPanel);
 chatCloseButton.addEventListener("click", closeChatPanel);
@@ -196,6 +200,27 @@ function resetQuestionFlow() {
   currentQuestionIndex = 0;
   currentQuestionDraft = "";
   showingSuggestion = false;
+}
+
+function resetProjectContractStateForNewIdea(nextIdea) {
+  const normalizedNext = String(nextIdea || "").trim();
+  const normalizedCurrent = String(baseIdea || "").trim();
+  if (!normalizedNext || normalizedNext === normalizedCurrent) {
+    return;
+  }
+
+  currentPreview = null;
+  currentProjectId = "";
+  chatFinalRequirements = "";
+  chatPendingCorrections = [];
+  chatRequestedFiles = [];
+  chatFilesToRemove = [];
+  chatUpdatedStack = null;
+  chatLinkedPreviewId = "";
+  pendingAgentUpdate = null;
+  isApplyingPendingAgentUpdate = false;
+  lastChatAction = null;
+  chatActionBar.hidden = true;
 }
 
 function collectSelectedStack() {
@@ -413,6 +438,7 @@ async function handleGenerateImmediately() {
     return;
   }
 
+  resetProjectContractStateForNewIdea(idea);
   baseIdea = idea;
   agentAnalysis = null;
   agentAnswers = {};
@@ -483,6 +509,7 @@ async function handleAskQuestions() {
     return;
   }
 
+  resetProjectContractStateForNewIdea(idea);
   baseIdea = idea;
   currentPreview = null;
   finalRequirements = "";
@@ -535,6 +562,7 @@ async function handleSkipToAgentSuggestion() {
     return;
   }
 
+  resetProjectContractStateForNewIdea(idea);
   baseIdea = idea;
   currentPreview = null;
   finalRequirements = "";
@@ -713,6 +741,14 @@ async function handleConfirmZip() {
 
     downloadLink.href = payload.downloadUrl;
     downloadLink.download = payload.filename;
+    currentProjectId = payload.projectId || "";
+    if (payload.ideUrl && openIdeLink) {
+      openIdeLink.href = payload.ideUrl;
+      openIdeLink.hidden = false;
+    }
+    if (closeIdeButton) {
+      closeIdeButton.hidden = !currentProjectId;
+    }
     downloadText.textContent = `Your generated project ZIP is ready: ${payload.filename}`;
     downloadSection.hidden = false;
     setAgentActivity({
@@ -723,6 +759,26 @@ async function handleConfirmZip() {
     setStatus("ZIP created successfully. You can download it now.", "success");
   } catch (error) {
     setStatus(error.message || "Could not create the ZIP.", "error");
+  } finally {
+    clearBusyState();
+  }
+}
+
+async function handleCloseIde() {
+  if (!currentProjectId) {
+    setStatus("Open an IDE before closing it.", "error");
+    return;
+  }
+  setBusy(true, "Closing IDE container...");
+  try {
+    const response = await fetch(`/close-ide/${currentProjectId}`, { method: "POST" });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.detail || "Could not close IDE.");
+    }
+    setStatus(payload.stopped ? "IDE container closed." : "No IDE container was running.", "success");
+  } catch (error) {
+    setStatus(error.message || "Could not close IDE.", "error");
   } finally {
     clearBusyState();
   }
@@ -787,7 +843,7 @@ async function handleChatSend() {
     chatModeBadge.textContent = llmModeUsed === "ollama" ? "Ollama Mode" : "Free Rule Mode";
     appendChatMessage("assistant", response.reply || "I understood that.");
     renderChatActions(response);
-    if (response.action === "update_requirements" && !response.needsConfirmation) {
+    if (response.intent === "planning_intent" && response.action === "update_requirements" && !response.needsConfirmation) {
       chatDraftIdea = response.updatedIdea || message;
       chatFinalRequirements = response.updatedRequirements || response.updatedIdea || message;
     }
@@ -843,10 +899,87 @@ function renderChatMessages() {
   chatMessages.forEach((message) => {
     const bubble = document.createElement("article");
     bubble.className = `chat-message ${message.role === "user" ? "user" : "assistant"}`;
-    bubble.textContent = message.content;
+    if (message.role === "assistant") {
+      bubble.innerHTML = renderSafeMarkdown(message.content);
+    } else {
+      bubble.textContent = message.content;
+    }
     chatMessagesElement.appendChild(bubble);
   });
   chatMessagesElement.scrollTop = chatMessagesElement.scrollHeight;
+}
+
+function renderSafeMarkdown(content) {
+  const source = String(content || "");
+  const blocks = [];
+  const withPlaceholders = source.replace(/```([\s\S]*?)```/g, (_match, code) => {
+    const index = blocks.length;
+    blocks.push(`<pre><code>${escapeHtml(code.trim())}</code></pre>`);
+    return `@@CODE_BLOCK_${index}@@`;
+  });
+  const lines = withPlaceholders.split(/\r?\n/);
+  const html = [];
+  let listOpen = false;
+
+  lines.forEach((line) => {
+    const trimmed = line.trim();
+    const codeMatch = trimmed.match(/^@@CODE_BLOCK_(\d+)@@$/);
+    if (codeMatch) {
+      if (listOpen) {
+        html.push("</ul>");
+        listOpen = false;
+      }
+      html.push(blocks[Number(codeMatch[1])] || "");
+      return;
+    }
+    if (!trimmed) {
+      if (listOpen) {
+        html.push("</ul>");
+        listOpen = false;
+      }
+      return;
+    }
+    if (trimmed.startsWith("- ")) {
+      if (!listOpen) {
+        html.push("<ul>");
+        listOpen = true;
+      }
+      html.push(`<li>${renderInlineMarkdown(trimmed.slice(2))}</li>`);
+      return;
+    }
+    if (listOpen) {
+      html.push("</ul>");
+      listOpen = false;
+    }
+    if (trimmed.startsWith("### ")) {
+      html.push(`<h4>${renderInlineMarkdown(trimmed.slice(4))}</h4>`);
+    } else if (trimmed.startsWith("## ")) {
+      html.push(`<h3>${renderInlineMarkdown(trimmed.slice(3))}</h3>`);
+    } else if (/^\d+\.\s+/.test(trimmed)) {
+      html.push(`<p>${renderInlineMarkdown(trimmed)}</p>`);
+    } else {
+      html.push(`<p>${renderInlineMarkdown(trimmed)}</p>`);
+    }
+  });
+  if (listOpen) {
+    html.push("</ul>");
+  }
+  return html.join("");
+}
+
+function renderInlineMarkdown(value) {
+  return escapeHtml(value)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
 function renderChatActions(action) {
@@ -858,14 +991,16 @@ function renderChatActions(action) {
     return;
   }
 
-  if (action.updatedIdea || action.updatedRequirements) {
+  if (action.intent === "planning_intent" && (action.updatedIdea || action.updatedRequirements)) {
     addChatActionButton("Use as Project Description", () => applyChatIdea(action));
   }
-  if (action.needsConfirmation) {
+  if (action.intent === "generation_intent" && action.needsConfirmation) {
+    addChatActionButton("Generate Project", () => applyChatAction(action));
+    addChatActionButton("Cancel", cancelChatAction, "ghost-button");
+  }
+  if (action.intent === "repair_intent" && action.needsConfirmation) {
     const confirmLabel = action.action === "change_stack"
       ? "Change Stack"
-      : action.action === "generate_project"
-        ? "Generate Project"
       : action.action === "remove_files" || action.action === "remove_feature"
         ? "Apply Corrections"
       : action.action === "add_files"
@@ -874,10 +1009,10 @@ function renderChatActions(action) {
     addChatActionButton(confirmLabel, () => applyChatAction(action));
     addChatActionButton("Cancel", cancelChatAction, "ghost-button");
   }
-  if (!action.needsConfirmation && (action.shouldGenerate || action.action === "generate_project")) {
+  if (action.intent === "generation_intent" && !action.needsConfirmation && (action.shouldGenerate || action.action === "generate_project")) {
     addChatActionButton("Generate Project", () => applyChatGenerate(action));
   }
-  if (action.shouldRegenerate || action.action === "regenerate_project") {
+  if (action.intent === "repair_intent" && (action.shouldRegenerate || action.action === "regenerate_project")) {
     addChatActionButton("Regenerate Project", () => regenerateFromChat(action));
   }
   if (!chatActionBar.children.length) {
@@ -904,6 +1039,7 @@ function applyChatIdea(action) {
   const nextIdea = action.updatedIdea || action.updatedRequirements || "";
   const nextRequirements = action.updatedRequirements || nextIdea;
   if (nextIdea) {
+    resetProjectContractStateForNewIdea(nextIdea);
     ideaInput.value = nextIdea;
     baseIdea = nextIdea;
   }
@@ -922,6 +1058,12 @@ async function applyChatAction(action) {
   if (!action) {
     return;
   }
+  if (action.intent === "chat_intent" || action.intent === "planning_intent" || action.intent === "ide_intent") {
+    if (action.intent === "planning_intent") {
+      applyChatIdea(action);
+    }
+    return;
+  }
   if (action.shouldPauseAgent && isAgentRunning) {
     pendingAgentUpdate = action;
     chatPendingCorrections.push(action);
@@ -929,19 +1071,19 @@ async function applyChatAction(action) {
     setStatus("Chat correction captured. I will apply it after the current preview is ready.", "success");
     return;
   }
-  if (action.action === "change_stack" && action.updatedStack) {
+  if (action.intent === "repair_intent" && action.action === "change_stack" && action.updatedStack) {
     await applyChatStack(action);
     return;
   }
-  if (action.action === "generate_project" || action.shouldGenerate) {
+  if (action.intent === "generation_intent" && (action.action === "generate_project" || action.shouldGenerate)) {
     await applyChatGenerate(action);
     return;
   }
-  if (action.action === "remove_files" || action.action === "remove_feature" || action.filesToRemove?.length) {
+  if (action.intent === "repair_intent" && (action.action === "remove_files" || action.action === "remove_feature" || action.filesToRemove?.length)) {
     await applyChatRemoveFiles(action);
     return;
   }
-  if (action.action === "add_files" || action.action === "add_feature" || action.action === "update_required_inputs" || action.shouldRegenerate || action.updatedRequirements || action.requestedFiles?.length) {
+  if (action.intent === "repair_intent" && (action.action === "add_files" || action.action === "add_feature" || action.action === "update_required_inputs" || action.shouldRegenerate || action.updatedRequirements || action.requestedFiles?.length)) {
     await applyChatCorrections(action);
     return;
   }
@@ -957,7 +1099,8 @@ async function applyChatCorrections(action) {
     await regenerateFromChat(action, { alreadyMerged: true });
     return;
   }
-  await generateFromChat(action, { alreadyMerged: true });
+  setStatus("Corrections are staged. Generate a project preview before applying repair actions.", "success");
+  refreshUiState();
 }
 
 async function applyChatRemoveFiles(action) {
@@ -1001,6 +1144,7 @@ async function applyChatStack(action) {
 function mergeChatActionState(action) {
   const nextIdea = action.updatedIdea || baseIdea || ideaInput.value.trim();
   const nextRequirements = action.updatedRequirements || finalRequirements || nextIdea;
+  resetProjectContractStateForNewIdea(nextIdea);
   if (nextIdea) {
     baseIdea = nextIdea;
     ideaInput.value = nextIdea;
@@ -1516,6 +1660,14 @@ function resetAll() {
   downloadLink.removeAttribute("href");
   downloadLink.removeAttribute("download");
   downloadText.textContent = "Your generated project ZIP is ready.";
+  currentProjectId = "";
+  if (openIdeLink) {
+    openIdeLink.hidden = true;
+    openIdeLink.removeAttribute("href");
+  }
+  if (closeIdeButton) {
+    closeIdeButton.hidden = true;
+  }
 
   agentUnderstandingText.textContent = "";
   clearCollection(agentAssumptionsList);

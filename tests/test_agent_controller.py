@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from app.agents.orchestrator_agent import orchestrator_agent
 from app.main import app
+from app.services import ide_service
 from app.services.agent_controller import agent_controller
 
 
@@ -1319,9 +1320,54 @@ class AgentControllerTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["llmModeUsed"], "free_rule_based")
+        self.assertEqual(payload["intent"], "planning_intent")
         self.assertEqual(payload["action"], "update_requirements")
         self.assertIn("student attendance", payload["updatedRequirements"].lower())
         self.assertFalse(payload["shouldGenerate"])
+
+    def test_chat_normal_question_does_not_trigger_project_pipeline_action(self) -> None:
+        response = self.client.post(
+            "/api/agent/chat",
+            json={
+                "message": "What is FastAPI?",
+                "currentIdea": "Build a todo app",
+                "currentPreview": {"projectName": "Todo App"},
+                "selectedStack": {"language": "Python", "frontend": "React", "backend": "FastAPI", "database": "SQLite"},
+                "agentState": "preview_ready",
+                "llmMode": "free_rule_based",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["intent"], "chat_intent")
+        self.assertEqual(payload["action"], "none")
+        self.assertFalse(payload["shouldGenerate"])
+        self.assertFalse(payload["shouldRegenerate"])
+        self.assertEqual(payload["requestedFiles"], [])
+        self.assertEqual(payload["filesToRemove"], [])
+
+    def test_chat_stack_suggestion_is_planning_not_generation(self) -> None:
+        response = self.client.post(
+            "/api/agent/chat",
+            json={
+                "message": "Suggest a stack for a puzzle game",
+                "currentIdea": "",
+                "currentPreview": {},
+                "selectedStack": {},
+                "agentState": "idle",
+                "llmMode": "free_rule_based",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["intent"], "planning_intent")
+        self.assertEqual(payload["action"], "update_requirements")
+        self.assertFalse(payload["shouldGenerate"])
+        self.assertFalse(payload["shouldRegenerate"])
+        self.assertEqual(payload["requestedFiles"], [])
+        self.assertIn("HTML/CSS/JavaScript", payload["reply"])
 
     def test_chat_generate_this_returns_generate_project_action(self) -> None:
         response = self.client.post(
@@ -1338,6 +1384,7 @@ class AgentControllerTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
+        self.assertEqual(payload["intent"], "generation_intent")
         self.assertEqual(payload["action"], "generate_project")
         self.assertTrue(payload["needsConfirmation"])
         self.assertTrue(payload["shouldGenerate"])
@@ -1359,6 +1406,7 @@ class AgentControllerTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         paths = {item["path"] for item in payload["requestedFiles"]}
+        self.assertEqual(payload["intent"], "repair_intent")
         self.assertTrue(payload["needsConfirmation"])
         self.assertIn("frontend/src/pages/AdminDashboard.jsx", paths)
         self.assertIn("frontend/src/pages/ReportPage.jsx", paths)
@@ -1378,6 +1426,7 @@ class AgentControllerTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
+        self.assertEqual(payload["intent"], "repair_intent")
         self.assertEqual(payload["action"], "add_files")
         self.assertTrue(payload["requestedFiles"])
         self.assertTrue(payload["needsConfirmation"])
@@ -1399,6 +1448,7 @@ class AgentControllerTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         paths = {item["path"] for item in response.json()["requestedFiles"]}
+        self.assertEqual(response.json()["intent"], "repair_intent")
         self.assertIn("frontend/src/pages/ReportPage.jsx", paths)
 
     def test_chat_reports_api_path_is_stack_correct_for_fastapi(self) -> None:
@@ -1416,6 +1466,7 @@ class AgentControllerTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         paths = {item["path"] for item in response.json()["requestedFiles"]}
+        self.assertEqual(response.json()["intent"], "repair_intent")
         self.assertIn("backend/app/routers/reports.py", paths)
 
     def test_chat_remove_report_page_returns_remove_files_action(self) -> None:
@@ -1437,6 +1488,7 @@ class AgentControllerTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
+        self.assertEqual(payload["intent"], "repair_intent")
         self.assertEqual(payload["action"], "remove_files")
         self.assertTrue(payload["needsConfirmation"])
         self.assertTrue(payload["shouldRegenerate"])
@@ -1457,6 +1509,7 @@ class AgentControllerTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
+        self.assertEqual(payload["intent"], "repair_intent")
         names = {item["name"] for item in payload["requiredInputs"]}
         self.assertTrue({"SMTP_EMAIL", "SMTP_PASSWORD", "SMTP_HOST", "SMTP_PORT"}.issubset(names))
         self.assertTrue(payload["needsConfirmation"])
@@ -1476,12 +1529,34 @@ class AgentControllerTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
+        self.assertEqual(payload["intent"], "repair_intent")
         self.assertEqual(payload["action"], "change_stack")
         self.assertEqual(payload["updatedStack"]["language"], "Java")
         self.assertEqual(payload["updatedStack"]["backend"], "Spring Boot")
         self.assertEqual(payload["updatedStack"]["source"], "chatbot_stack_change")
         self.assertTrue(payload["updatedStack"]["isUserConfirmedStack"])
         self.assertTrue(payload["updatedStack"]["isDirty"])
+
+    def test_chat_ide_request_is_not_generation_or_repair(self) -> None:
+        response = self.client.post(
+            "/api/agent/chat",
+            json={
+                "message": "Open the IDE",
+                "currentIdea": "Build a todo app",
+                "currentPreview": {"projectName": "Todo App"},
+                "selectedStack": {"language": "Python", "frontend": "React", "backend": "FastAPI", "database": "SQLite"},
+                "agentState": "preview_ready",
+                "llmMode": "free_rule_based",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["intent"], "ide_intent")
+        self.assertEqual(payload["action"], "none")
+        self.assertFalse(payload["shouldGenerate"])
+        self.assertFalse(payload["shouldRegenerate"])
+        self.assertEqual(payload["requestedFiles"], [])
 
     def test_chat_requested_files_flow_into_generation(self) -> None:
         with patch.dict(os.environ, {"OLLAMA_BASE_URL": ""}, clear=False):
@@ -1664,6 +1739,100 @@ class AgentControllerTests(unittest.TestCase):
         self.assertEqual(archive_paths, set(file_map))
         self.assertTrue(expected_paths.issubset(archive_paths))
 
+    def test_new_frontend_only_generation_does_not_reuse_previous_backend_contract(self) -> None:
+        banking_idea = """
+        Build a banking customer support chatbot with account balance, recent
+        transactions, loan EMI details, complaint status, OTP verification, and
+        a React chat UI.
+        """
+        with patch.dict(os.environ, {"OLLAMA_BASE_URL": ""}, clear=False):
+            banking_response = self.client.post(
+                "/api/suggest",
+                json={"idea": banking_idea, "generationMode": "fast"},
+            )
+
+        self.assertEqual(banking_response.status_code, 200)
+        banking_preview = banking_response.json()
+        stale_requested_files = banking_preview.get("requestedFiles", [])
+        banking_required = set(banking_preview.get("projectContract", {}).get("required_files", []))
+        self.assertIn("backend/app/routers/loans.py", banking_required)
+        self.assertIn("backend/app/services/loan_service.py", banking_required)
+
+        with patch.dict(os.environ, {"OLLAMA_BASE_URL": ""}, clear=False):
+            game_response = self.client.post(
+                "/api/suggest",
+                json={
+                    "idea": "Build Enigma Grid, a frontend-only JavaScript puzzle game.",
+                    "generationMode": "fast",
+                    "selectedStack": {
+                        "language": "JavaScript",
+                        "frontend": "HTML/CSS/JavaScript",
+                        "backend": "None",
+                        "database": "None",
+                        "aiTools": "None",
+                        "deployment": "None",
+                    },
+                    "requestedFiles": stale_requested_files,
+                    "customFiles": stale_requested_files,
+                },
+            )
+
+        self.assertEqual(game_response.status_code, 200)
+        game_preview = game_response.json()
+        file_paths = {item["path"] for item in game_preview.get("files", [])}
+        required_paths = set(game_preview.get("projectContract", {}).get("required_files", []))
+        custom_paths = {item["path"] for item in game_preview.get("customFiles", [])}
+        validation_status = game_preview.get("validationStatus", {})
+
+        self.assertEqual(game_preview["selectedStack"]["backend"], "None")
+        self.assertEqual(game_preview["templateFamily"], "puzzle-game")
+        for path_set in (file_paths, required_paths, custom_paths):
+            self.assertNotIn("backend/app/routers/loans.py", path_set)
+            self.assertNotIn("backend/app/services/loan_service.py", path_set)
+            self.assertFalse(any(path.startswith("backend/") for path in path_set))
+            self.assertFalse(any("/routers/" in path or "/services/" in path for path in path_set))
+        self.assertEqual(game_preview.get("projectContract", {}).get("backend_routes"), [])
+        self.assertEqual(game_preview.get("projectContract", {}).get("services"), [])
+        self.assertEqual(validation_status.get("missingFiles"), [])
+        self.assertTrue(validation_status.get("valid"), validation_status)
+
+    def test_frontend_only_chat_planning_after_banking_preview_does_not_carry_backend_files(self) -> None:
+        banking_preview = {
+            "projectName": "Banking Loans",
+            "problemStatement": "Banking loan app",
+            "selectedStack": {"language": "Python", "frontend": "React", "backend": "FastAPI", "database": "SQLite"},
+            "requestedFiles": [
+                {"path": "backend/app/routers/loans.py", "purpose": "Loan routes"},
+                {"path": "backend/app/services/loan_service.py", "purpose": "Loan service"},
+            ],
+            "projectContract": {
+                "required_files": ["backend/app/routers/loans.py", "backend/app/services/loan_service.py"],
+                "backend_routes": ["backend/app/routers/loans.py"],
+                "services": ["backend/app/services/loan_service.py"],
+            },
+        }
+        response = self.client.post(
+            "/api/agent/chat",
+            json={
+                "message": "Plan Enigma Grid, a frontend-only JavaScript puzzle game.",
+                "currentIdea": "Banking loan app",
+                "currentPreview": banking_preview,
+                "selectedStack": {"language": "Python", "frontend": "React", "backend": "FastAPI", "database": "SQLite"},
+                "agentState": "preview_ready",
+                "llmMode": "free_rule_based",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["intent"], "planning_intent")
+        self.assertEqual(payload["requestedFiles"], [])
+        self.assertEqual(payload["filesToRemove"], [])
+        self.assertFalse(payload["shouldGenerate"])
+        self.assertFalse(payload["shouldRegenerate"])
+        self.assertNotIn("backend/app/routers/loans.py", payload["reply"])
+        self.assertIn("HTML/CSS/JavaScript", payload["reply"])
+
     def test_banking_chatbot_repair_restores_missing_domain_files(self) -> None:
         idea = """
         Customer banking chatbot IVR with account balance, recent transactions,
@@ -1732,6 +1901,15 @@ class AgentControllerTests(unittest.TestCase):
         self.assertIn('generationQuality: "complete"', script)
         self.assertIn("ContractValidationAgent verified required files", template)
         self.assertIn("No missing required files", script)
+        self.assertIn("renderSafeMarkdown", script)
+        self.assertIn("bubble.innerHTML = renderSafeMarkdown", script)
+        self.assertIn('action.intent === "generation_intent"', script)
+        self.assertIn('action.intent === "repair_intent"', script)
+        self.assertIn('action.intent === "planning_intent"', script)
+        self.assertIn("Corrections are staged. Generate a project preview before applying repair actions.", script)
+        self.assertIn(".chat-message pre", styles)
+        corrections_body = script.split("async function applyChatCorrections", 1)[1].split("async function applyChatRemoveFiles", 1)[0]
+        self.assertNotIn("await generateFromChat", corrections_body)
 
     def test_preview_includes_project_contract_and_validation_status(self) -> None:
         response = self.client.post(
@@ -1873,6 +2051,193 @@ class AgentControllerTests(unittest.TestCase):
         }
         response = self.client.post("/api/zip", json={"preview": preview})
         self.assertEqual(response.status_code, 400)
+
+    def test_zip_creates_generated_project_workspace_and_ide_links(self) -> None:
+        with patch.dict(os.environ, {"OLLAMA_BASE_URL": ""}, clear=False):
+            preview = asyncio.run(agent_controller.generate_files("Build a todo API", generation_mode="fast"))
+
+        response = self.client.post("/api/zip", json={"preview": preview})
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        project_id = payload["projectId"]
+        self.assertEqual(ide_service.validate_project_id(project_id), project_id)
+        self.assertEqual(payload["ideUrl"], f"/open-ide/{project_id}")
+        self.assertEqual(payload["workspaceDownloadUrl"], f"/download/{project_id}")
+
+        files_response = self.client.get(f"/api/files/{project_id}")
+        self.assertEqual(files_response.status_code, 200)
+        self.assertIn("backend/app/main.py", files_response.json()["files"])
+
+    def test_ide_rejects_unsafe_project_ids_and_paths(self) -> None:
+        bad_id_response = self.client.get("/open-ide/not-a-uuid")
+        self.assertEqual(bad_id_response.status_code, 400)
+
+        project_id = "00000000-0000-4000-8000-000000000000"
+        path_response = self.client.get(f"/api/file/{project_id}", params={"path": "../README.md"})
+        self.assertEqual(path_response.status_code, 400)
+
+    def test_ide_free_port_and_docker_command_are_safe(self) -> None:
+        port = ide_service.find_free_port()
+        self.assertIsInstance(port, int)
+        self.assertGreater(port, 0)
+        command = ide_service.build_docker_run_command(
+            "00000000-0000-4000-8000-000000000000",
+            Path("generated_projects/00000000-0000-4000-8000-000000000000").resolve(),
+            port,
+        )
+        self.assertEqual(command[0:3], ["docker", "run", "-d"])
+        self.assertIn("project-agent-ide", command)
+        self.assertTrue(any("host.docker.internal:11434/api/generate" in item for item in command))
+        self.assertTrue(any(item.startswith("PASSWORD=") for item in command))
+
+    def test_open_ide_reuses_container_and_close_removes_it(self) -> None:
+        project_id = "00000000-0000-4000-8000-000000000001"
+        project_dir = Path("generated_projects") / project_id
+        project_dir.mkdir(parents=True, exist_ok=True)
+        (project_dir / "README.md").write_text("hello", encoding="utf-8")
+        ide_service.IDE_REGISTRY.pop(project_id, None)
+        calls: list[dict[str, object]] = []
+
+        def fake_run(command, **kwargs):
+            calls.append({"command": command, "kwargs": kwargs})
+            class Result:
+                returncode = 0
+                stdout = "container-123\n"
+                stderr = ""
+            if "inspect" in command:
+                Result.stdout = "true\n"
+            if "ps" in command:
+                Result.stdout = ""
+            return Result()
+
+        with patch("app.services.ide_service.subprocess.run", side_effect=fake_run):
+            with patch("app.services.ide_service.find_free_port", return_value=32123):
+                with patch("app.services.ide_service.wait_for_ide_health", return_value=True):
+                    response = self.client.get(f"/open-ide/{project_id}", follow_redirects=False)
+                    self.assertEqual(response.status_code, 307)
+                    second = self.client.get(f"/open-ide/{project_id}", follow_redirects=False)
+                    self.assertEqual(second.status_code, 307)
+                    status = self.client.get(f"/api/ide-status/{project_id}")
+                    self.assertEqual(status.status_code, 200)
+                    self.assertEqual(status.json()["status"], "running")
+                    self.assertTrue(status.json()["password"])
+                    close = self.client.post(f"/close-ide/{project_id}")
+                    self.assertEqual(close.status_code, 200)
+
+        docker_run_calls = [item for item in calls if item["command"][:3] == ["docker", "run", "-d"]]
+        self.assertEqual(len(docker_run_calls), 1)
+        self.assertTrue(all(item["kwargs"].get("shell") is False for item in calls))
+        self.assertNotIn(project_id, ide_service.IDE_REGISTRY)
+
+    def test_open_ide_health_timeout_cleans_container(self) -> None:
+        project_id = "00000000-0000-4000-8000-000000000003"
+        project_dir = Path("generated_projects") / project_id
+        project_dir.mkdir(parents=True, exist_ok=True)
+        (project_dir / "README.md").write_text("hello", encoding="utf-8")
+        ide_service.IDE_REGISTRY.pop(project_id, None)
+        calls: list[list[str]] = []
+
+        def fake_run(command, **_kwargs):
+            calls.append(command)
+            class Result:
+                returncode = 0
+                stdout = "container-timeout\n"
+                stderr = ""
+            if "ps" in command:
+                Result.stdout = ""
+            return Result()
+
+        with patch("app.services.ide_service.subprocess.run", side_effect=fake_run):
+            with patch("app.services.ide_service.find_free_port", return_value=32124):
+                with patch("app.services.ide_service.wait_for_ide_health", return_value=False):
+                    response = self.client.get(f"/open-ide/{project_id}", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 500)
+        self.assertIn("code-server did not become ready", response.json()["detail"])
+        self.assertTrue(any(command[:2] == ["docker", "stop"] for command in calls))
+        self.assertTrue(any(command[:2] == ["docker", "rm"] for command in calls))
+        self.assertNotIn(project_id, ide_service.IDE_REGISTRY)
+
+    def test_stale_container_removed_before_docker_run_and_docker_errors_are_clear(self) -> None:
+        calls: list[list[str]] = []
+        project_id = "00000000-0000-4000-8000-000000000004"
+        project_dir = Path("generated_projects") / project_id
+        project_dir.mkdir(parents=True, exist_ok=True)
+        (project_dir / "README.md").write_text("hello", encoding="utf-8")
+
+        def fake_run(command, **_kwargs):
+            calls.append(command)
+            class Result:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            if "ps" in command:
+                Result.stdout = "old-container\n"
+            if command[:3] == ["docker", "run", "-d"]:
+                Result.returncode = 1
+                Result.stderr = "Cannot connect to the Docker daemon"
+            return Result()
+
+        with patch("app.services.ide_service.subprocess.run", side_effect=fake_run):
+            response = self.client.get(f"/open-ide/{project_id}", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.json()["detail"], ide_service.DOCKER_UNAVAILABLE_MESSAGE)
+        self.assertTrue(any(command[:3] == ["docker", "rm", "-f"] for command in calls))
+
+    def test_idle_cleanup_removes_old_instances(self) -> None:
+        old_id = "00000000-0000-4000-8000-000000000005"
+        fresh_id = "00000000-0000-4000-8000-000000000006"
+        now = time.time()
+        ide_service.IDE_REGISTRY[old_id] = ide_service.IdeInstance(old_id, 32001, "old-container", "http://127.0.0.1:32001", "running", "pw", now - 3600)
+        ide_service.IDE_REGISTRY[fresh_id] = ide_service.IdeInstance(fresh_id, 32002, "fresh-container", "http://127.0.0.1:32002", "running", "pw", now)
+
+        with patch("app.services.ide_service.subprocess.run") as run_mock:
+            class Result:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            run_mock.return_value = Result()
+            ide_service.cleanup_idle_ide_instances(max_idle_minutes=45)
+
+        self.assertNotIn(old_id, ide_service.IDE_REGISTRY)
+        self.assertIn(fresh_id, ide_service.IDE_REGISTRY)
+        ide_service.IDE_REGISTRY.pop(fresh_id, None)
+
+    def test_download_project_workspace_includes_edited_files(self) -> None:
+        project_id = "00000000-0000-4000-8000-000000000002"
+        project_dir = Path("generated_projects") / project_id
+        project_dir.mkdir(parents=True, exist_ok=True)
+        (project_dir / "README.md").write_text("before", encoding="utf-8")
+
+        save_response = self.client.post(
+            f"/api/file/{project_id}/save",
+            json={"path": "README.md", "content": "after edit"},
+        )
+        self.assertEqual(save_response.status_code, 200)
+        download_response = self.client.get(f"/download/{project_id}")
+        self.assertEqual(download_response.status_code, 200)
+        zip_path = Path("generated") / f"{project_id}.zip"
+        with ZipFile(zip_path) as archive:
+            content = archive.read(f"{project_id}/README.md").decode("utf-8")
+        self.assertEqual(content, "after edit")
+
+    def test_project_agent_extension_and_dockerfile_contract(self) -> None:
+        package_json = json.loads(Path("vscode-extension/project-agent/package.json").read_text(encoding="utf-8"))
+        dockerfile = Path("Dockerfile.ide").read_text(encoding="utf-8")
+        extension_ts = Path("vscode-extension/project-agent/src/extension.ts").read_text(encoding="utf-8")
+
+        self.assertIn("projectAgent", package_json["contributes"]["viewsContainers"]["activitybar"][0]["id"])
+        self.assertIn("projectAgent.chatView", json.dumps(package_json["contributes"]["views"]))
+        self.assertIn("projectAgent.model", package_json["contributes"]["configuration"]["properties"])
+        self.assertIn("--allow-missing-repository", package_json["scripts"]["package"])
+        self.assertIn("code-server --install-extension /extensions/project-agent.vsix", dockerfile)
+        self.assertIn('--auth", "password"', dockerfile)
+        self.assertIn("host.docker.internal:11434/api/generate", dockerfile)
+        self.assertIn("host.docker.internal:11434/api/generate", extension_ts)
+        self.assertIn("Ollama is not running. Start Ollama and make sure qwen2.5-coder is installed.", extension_ts)
+        self.assertIn("Apply Fix", extension_ts)
+        self.assertIn("Insert as New File", extension_ts)
 
 
 if __name__ == "__main__":

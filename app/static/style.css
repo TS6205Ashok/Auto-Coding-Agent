@@ -791,7 +791,6 @@ button:disabled {
   padding: 10px 12px;
   border-radius: 12px;
   line-height: 1.5;
-  white-space: pre-wrap;
 }
 
 .chat-message.user {
@@ -805,6 +804,45 @@ button:disabled {
   border: 1px solid #eaecf0;
   background: #fff;
   color: var(--text);
+}
+
+.chat-message p,
+.chat-message ul,
+.chat-message pre,
+.chat-message h3,
+.chat-message h4 {
+  margin: 0 0 8px;
+}
+
+.chat-message p:last-child,
+.chat-message ul:last-child,
+.chat-message pre:last-child {
+  margin-bottom: 0;
+}
+
+.chat-message ul {
+  padding-left: 18px;
+}
+
+.chat-message code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: #f2f4f7;
+  font-size: 0.9em;
+}
+
+.chat-message pre {
+  overflow-x: auto;
+  padding: 10px;
+  border-radius: 8px;
+  background: #101828;
+  color: #f9fafb;
+}
+
+.chat-message pre code {
+  padding: 0;
+  background: transparent;
+  color: inherit;
 }
 
 .chat-action-bar {

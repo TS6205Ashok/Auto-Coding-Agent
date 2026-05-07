@@ -1,0 +1,22 @@
+FROM codercom/code-server:latest
+
+USER root
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 python3-pip python3-venv nodejs npm git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PROJECT_AGENT_MODEL=qwen2.5-coder:latest
+ENV PROJECT_AGENT_FALLBACK_MODEL=codellama:7b
+ENV PROJECT_AGENT_OLLAMA_URL=http://host.docker.internal:11434/api/generate
+
+RUN mkdir -p /extensions
+COPY vscode-extension/project-agent/project-agent.vsix /extensions/project-agent.vsix
+RUN code-server --install-extension /extensions/project-agent.vsix
+
+USER coder
+WORKDIR /workspace
+
+EXPOSE 8080
+
+CMD ["code-server", "--bind-addr", "0.0.0.0:8080", "--auth", "password", "/workspace"]

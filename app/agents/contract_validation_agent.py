@@ -98,7 +98,13 @@ class ContractValidationAgent:
         requested_paths = {
             str(item.get("path"))
             for item in [*context.custom_manifest, *context.domain_required_files]
-            if item.get("path") and item.get("path") not in context.files_to_remove
+            if item.get("path")
+            and item.get("path") not in context.files_to_remove
+            and _path_allowed_for_contract_request(
+                str(item.get("path")),
+                contract.selected_stack,
+                contract.forbidden_files,
+            )
         }
         missing_requested = sorted(requested_paths - required_files)
         if missing_requested:
@@ -118,3 +124,18 @@ class ContractValidationAgent:
 
 def _paths_matching(paths: list[str], markers: tuple[str, ...]) -> list[str]:
     return sorted(path for path in paths if any(marker in path for marker in markers))
+
+
+def _path_allowed_for_contract_request(
+    path: str,
+    selected_stack: dict[str, str],
+    forbidden_files: list[str],
+) -> bool:
+    lowered = path.replace("\\", "/").strip("/").lower()
+    backend = str(selected_stack.get("backend") or "")
+    if backend in {"", "Auto", "None"}:
+        if lowered.startswith("backend/") or lowered.startswith(("app/routers/", "app/services/", "frontend/src/services/")):
+            return False
+        if lowered.endswith((".py", ".java")) or lowered in {"requirements.txt", "pom.xml"}:
+            return False
+    return not any(forbidden_path(path, [pattern]) for pattern in forbidden_files)

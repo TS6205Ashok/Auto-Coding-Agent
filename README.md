@@ -145,9 +145,79 @@ This keeps ZIP creation compatible with Hugging Face temporary storage.
 - `POST /api/suggest` returns a normalized project preview
 - `POST /api/zip` writes the confirmed project into `generated/` and returns a download URL
 - `GET /downloads/{filename}` downloads the generated ZIP
+- `GET /open-ide/{project_id}` opens the generated project in a code-server browser IDE
+- `POST /close-ide/{project_id}` stops/removes the IDE container for that project
+- `GET /download/{project_id}` downloads the edited IDE workspace as a ZIP
 
 ## Deployment Notes
 
 - Generated project artifacts are written only inside `generated/`
+- IDE workspaces are written inside `generated_projects/`
 - The app assumes ephemeral writable storage is acceptable for preview ZIP downloads
 - No dependency installation happens during preview or ZIP creation
+
+## Browser IDE Setup On Windows
+
+The IDE workflow uses real `code-server`, not a fake Monaco-only editor.
+
+1. Install Docker Desktop.
+2. Install Ollama.
+3. Pull local coding models:
+
+```powershell
+ollama pull qwen2.5-coder
+ollama pull codellama:7b
+```
+
+4. Confirm Ollama is running at `http://127.0.0.1:11434`.
+5. Install Python packages:
+
+```powershell
+pip install -r requirements.txt
+```
+
+6. Build the Project Agent VS Code extension:
+
+```powershell
+cd vscode-extension/project-agent
+npm install
+npm run compile
+npm run package
+cd ../..
+```
+
+Confirm this file exists before building Docker:
+
+```powershell
+Test-Path vscode-extension/project-agent/project-agent.vsix
+```
+
+If it returns `False`, run `npm run package` again from `vscode-extension/project-agent`.
+
+7. Make sure Docker Desktop is running, then build the IDE image:
+
+```powershell
+docker build -f Dockerfile.ide -t project-agent-ide .
+```
+
+8. Run the generator:
+
+```powershell
+python app.py
+```
+
+9. Generate a project, create the ZIP, then click **Open in IDE**.
+
+code-server may ask for a generated project password. Use the password returned by the local IDE status API:
+
+```text
+http://127.0.0.1:7860/api/ide-status/<project_id>
+```
+
+IDE environment defaults:
+
+```env
+PROJECT_AGENT_MODEL=qwen2.5-coder:latest
+PROJECT_AGENT_FALLBACK_MODEL=codellama:7b
+PROJECT_AGENT_OLLAMA_URL=http://host.docker.internal:11434/api/generate
+```

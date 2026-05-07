@@ -1,0 +1,38 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Install Dependencies",
+      "type": "shell",
+      "command": "./setup.sh",
+      "windows": {
+        "command": ".\\setup.bat"
+      },
+      "detail": "Project Agent Generated Starter v1 | Main file: backend/src/main/java/com/example/app/Application.java",
+      "problemMatcher": [],
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "Run Project",
+      "type": "shell",
+      "command": "./run.sh",
+      "windows": {
+        "command": ".\\run.bat"
+      },
+      "detail": "Project Agent Generated Starter v1 | Run command: cd backend && mvn spring-boot:run",
+      "problemMatcher": [],
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    }
+  ]
+}

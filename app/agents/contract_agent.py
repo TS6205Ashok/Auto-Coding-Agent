@@ -52,7 +52,16 @@ class ContractAgent:
             if item.get("path") and item.get("path") not in removed_paths
         ]
         custom_paths = {str(item.get("path")) for item in custom_requested if item.get("path")}
-        required_files = sorted((protected_paths | custom_paths) - (removed_paths - protected_paths))
+        required_files = sorted(
+            path
+            for path in ((protected_paths | custom_paths) - (removed_paths - protected_paths))
+            if _path_allowed_for_current_scope(path, architecture.selected_stack, architecture.forbidden_files)
+        )
+        modules = [
+            _filter_module_paths(dict(item), architecture.selected_stack, architecture.forbidden_files)
+            for item in ai.merge_modules(context.domain_modules, context.modules)
+        ]
+        modules = [item for item in modules if item.get("keyFiles")]
 
         context.project_contract = CompleteProjectContract(
             project_name=context.project_name or ai.clean_project_name(None, context.prompt),
@@ -66,7 +75,7 @@ class ContractAgent:
             optional_files=[],
             forbidden_files=list(architecture.forbidden_files),
             required_inputs=ai.normalize_required_inputs(context.required_inputs or architecture.required_inputs),
-            modules=[dict(item) for item in ai.merge_modules(context.domain_modules, context.modules)],
+            modules=modules,
             pages=_paths_matching(required_files, ("/pages/", "src/pages/", ".html")),
             backend_routes=_paths_matching(required_files, ("/routers/", "/routes/", "/controller/")),
             services=_paths_matching(required_files, ("/services/", "/service/")),
@@ -93,3 +102,36 @@ class ContractAgent:
 
 def _paths_matching(paths: list[str], markers: tuple[str, ...]) -> list[str]:
     return sorted(path for path in paths if any(marker in path for marker in markers))
+
+
+def _filter_module_paths(
+    module: dict[str, Any],
+    selected_stack: Mapping[str, str],
+    forbidden_files: list[str],
+) -> dict[str, Any]:
+    key_files = [
+        str(path)
+        for path in module.get("keyFiles", [])
+        if _path_allowed_for_current_scope(str(path), selected_stack, forbidden_files)
+    ]
+    module["keyFiles"] = key_files
+    return module
+
+
+def _path_allowed_for_current_scope(
+    path: str,
+    selected_stack: Mapping[str, str],
+    forbidden_files: list[str],
+) -> bool:
+    lowered = path.replace("\\", "/").strip("/").lower()
+    backend = str(selected_stack.get("backend") or "")
+    if backend in {"", "Auto", "None"}:
+        if lowered.startswith("backend/") or lowered.startswith(("app/routers/", "app/services/", "frontend/src/services/")):
+            return False
+        if lowered.endswith((".py", ".java")) or lowered in {"requirements.txt", "pom.xml"}:
+            return False
+    forbidden = [item.replace("\\", "/").lstrip("/").lower() for item in forbidden_files]
+    return not any(
+        lowered == item or (item.endswith("/") and lowered.startswith(item))
+        for item in forbidden
+    )

@@ -1,0 +1,76 @@
+{
+  "name": "project-agent",
+  "displayName": "Project Agent",
+  "description": "Local Ollama coding assistant for generated projects.",
+  "version": "0.1.0",
+  "publisher": "project-agent",
+  "engines": {
+    "vscode": "^1.86.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": [
+    "onView:projectAgent.chatView",
+    "onCommand:projectAgent.openChat",
+    "onCommand:projectAgent.applyFix"
+  ],
+  "main": "./dist/extension.js",
+  "scripts": {
+    "compile": "tsc -p ./",
+    "package": "vsce package --allow-missing-repository --out project-agent.vsix"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "projectAgent.openChat",
+        "title": "Project Agent: Open Chat"
+      },
+      {
+        "command": "projectAgent.applyFix",
+        "title": "Project Agent: Apply Fix"
+      }
+    ],
+    "configuration": {
+      "title": "Project Agent",
+      "properties": {
+        "projectAgent.model": {
+          "type": "string",
+          "default": "qwen2.5-coder:latest",
+          "description": "Primary local Ollama model."
+        },
+        "projectAgent.fallbackModel": {
+          "type": "string",
+          "default": "codellama:7b",
+          "description": "Fallback local Ollama model."
+        },
+        "projectAgent.ollamaUrl": {
+          "type": "string",
+          "default": "http://host.docker.internal:11434/api/generate",
+          "description": "Ollama generate API URL."
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "projectAgent",
+          "title": "Project Agent",
+          "icon": "media/project-agent.svg"
+        }
+      ]
+    },
+    "views": {
+      "projectAgent": [
+        {
+          "id": "projectAgent.chatView",
+          "name": "Project Agent"
+        }
+      ]
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.86.0",
+    "@vscode/vsce": "^2.15.0",
+    "typescript": "^5.3.3"
+  }
+}

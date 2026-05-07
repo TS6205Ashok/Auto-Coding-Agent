@@ -155,7 +155,7 @@ class PackagingAgent:
             context.template_family or "generic",
             len(context.preview.get("files", [])),
         )
-        return create_project_zip(context.preview, generated_dir)
+        return create_project_zip(context.preview, generated_dir, generated_dir.parent / "generated_projects")
 
     def _build_validation_status(
         self,
