@@ -1,0 +1,14 @@
+{
+  "workbench.colorTheme": "Project Agent IDE Dark",
+  "workbench.startupEditor": "none",
+  "workbench.editorAssociations": {
+    "PROJECT_AGENT_IDE.md": "default"
+  },
+  "workbench.activityBar.location": "side",
+  "workbench.sideBar.location": "left",
+  "extensions.ignoreRecommendations": false,
+  "security.workspace.trust.enabled": false,
+  "projectAgent.model": "qwen2.5-coder:latest",
+  "projectAgent.fallbackModel": "codellama:7b",
+  "projectAgent.ollamaUrl": "http://host.docker.internal:11434/api/generate"
+}

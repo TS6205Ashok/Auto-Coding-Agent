@@ -244,6 +244,12 @@ button:disabled {
   color: var(--success);
 }
 
+.status-message.warning {
+  background: #fffaeb;
+  border-color: #fedf89;
+  color: #b54708;
+}
+
 .status-message.error {
   background: var(--danger-soft);
   border-color: #fecdca;

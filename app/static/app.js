@@ -141,6 +141,9 @@ generateProjectButton.addEventListener("click", handleGenerateProject);
 regenerateButton.addEventListener("click", handleRegenerate);
 confirmButton.addEventListener("click", handleConfirmZip);
 closeIdeButton.addEventListener("click", handleCloseIde);
+if (openIdeLink) {
+  openIdeLink.addEventListener("click", handleOpenIde);
+}
 clearButton.addEventListener("click", resetAll);
 chatToggleButton.addEventListener("click", toggleChatPanel);
 chatCloseButton.addEventListener("click", closeChatPanel);
@@ -782,6 +785,32 @@ async function handleCloseIde() {
     setStatus(error.message || "Could not close IDE.", "error");
   } finally {
     clearBusyState();
+  }
+}
+
+async function handleOpenIde(event) {
+  if (!currentProjectId) {
+    return;
+  }
+  event.preventDefault();
+  const href = openIdeLink?.href;
+  try {
+    const response = await fetch(`/api/ide-preflight/${encodeURIComponent(currentProjectId)}`);
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.detail || "Could not check Project Agent IDE.");
+    }
+    if (payload.warning) {
+      setStatus(`${payload.warning} The IDE will still open. Password: ${payload.password || "1234$"}`, "warning");
+    } else {
+      setStatus(`Opening Project Agent IDE. Password: ${payload.password || "1234$"}`, "success");
+    }
+  } catch (error) {
+    setStatus(error.message || "Could not check Project Agent IDE.", "error");
+  } finally {
+    if (href) {
+      window.open(href, "_blank", "noopener,noreferrer");
+    }
   }
 }
 

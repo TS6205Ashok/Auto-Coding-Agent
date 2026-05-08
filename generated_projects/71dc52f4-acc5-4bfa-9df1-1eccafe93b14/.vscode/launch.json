@@ -1,0 +1,34 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Spring Boot App",
+      "type": "java",
+      "request": "launch",
+      "mainClass": "com.example.app.Application",
+      "cwd": "${workspaceFolder}/backend"
+    },
+    {
+      "name": "Run Frontend Dev Server",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "npm run dev",
+      "cwd": "${workspaceFolder}/frontend"
+    },
+    {
+      "name": "Run Project Task",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": ".\\run.bat",
+      "cwd": "${workspaceFolder}"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Project Agent: Run Main Project",
+      "configurations": [
+        "Run Spring Boot App"
+      ]
+    }
+  ]
+}

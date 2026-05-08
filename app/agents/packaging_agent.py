@@ -8,7 +8,14 @@ from app.agents.repair_agent import RepairAgent
 from app.agents.validation_agent import ValidationAgent
 from app.services import ai_service as ai
 from app.services.architecture_registry import final_architecture_from_preview
-from app.services.file_service import contract_required_paths, missing_contract_files
+from app.services.file_service import (
+    MAX_GENERATED_FILES,
+    build_deferred_modules_doc,
+    build_generation_size_metadata,
+    contract_required_paths,
+    missing_contract_files,
+    validate_generated_files,
+)
 from app.services.zip_service import create_project_zip
 
 
@@ -27,6 +34,11 @@ class PackagingAgent:
     def prepare_preview(self, context: AgentWorkflowContext) -> AgentWorkflowContext:
         repair_attempts = 0
         repaired_files: set[str] = set(context.repaired_files)
+        initial_files = [
+            item
+            for item in context.preview.get("files", [])
+            if isinstance(item, dict) and str(item.get("path") or "").strip()
+        ]
         context = self.validation_agent.run(context)
         max_repair_attempts = 3
         if context.validation_findings:
@@ -101,6 +113,7 @@ class PackagingAgent:
                 context.final_requirements or context.prompt,
             )
             context = self.validation_agent.run(context)
+        self._preserve_deferred_large_project_files(context, initial_files)
         context.preview["validationStatus"] = self._build_validation_status(
             context,
             repair_attempts=repair_attempts,
@@ -113,6 +126,32 @@ class PackagingAgent:
             len(context.validation_findings),
         )
         return context
+
+    def _preserve_deferred_large_project_files(
+        self,
+        context: AgentWorkflowContext,
+        initial_files: list[dict],
+    ) -> None:
+        if len(initial_files) <= MAX_GENERATED_FILES or context.preview.get("deferredFiles"):
+            return
+        current_paths = {
+            str(item.get("path") or "")
+            for item in context.preview.get("files", [])
+            if isinstance(item, dict)
+        }
+        deferred_files = [
+            {"path": str(item.get("path") or ""), "reason": "Deferred from optimized very large project output."}
+            for item in initial_files
+            if str(item.get("path") or "") and str(item.get("path") or "") not in current_paths
+        ]
+        if not deferred_files:
+            return
+        merged_files = [
+            *context.preview.get("files", []),
+            {"path": "DEFERRED_MODULES.md", "content": build_deferred_modules_doc(deferred_files)},
+        ]
+        context.preview["files"] = validate_generated_files(merged_files)
+        context.preview.update(build_generation_size_metadata(context.preview["files"], deferred_files=deferred_files))
 
     def build_zip(self, preview: dict, generated_dir: Path) -> dict[str, str]:
         final_architecture = final_architecture_from_preview(preview)
@@ -185,4 +224,10 @@ class PackagingAgent:
             "repairedFiles": repaired_files,
             "contractRequiredFileCount": required_file_count,
             "generatedFileCount": generated_file_count,
+            "projectSizeTier": context.preview.get("projectSizeTier", "small"),
+            "generationWarnings": context.preview.get("generationWarnings", []),
+            "partialPackaging": bool(context.preview.get("partialPackaging")),
+            "chunkSize": context.preview.get("chunkSize", 100),
+            "chunkCount": context.preview.get("chunkCount", 1),
+            "processedFileCount": context.preview.get("processedFileCount", generated_file_count),
         }

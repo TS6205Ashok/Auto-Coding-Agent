@@ -168,6 +168,19 @@ Each generated IDE workspace includes:
 
 The Docker image installs `vscode-extension/project-agent/project-agent.vsix` by default. The assistant uses Ollama from inside Docker through `http://host.docker.internal:11434/api/generate`.
 
+Project Agent IDE uses code-server password auth. The default local IDE password is:
+
+```text
+1234$
+```
+
+If the assistant does not respond, open the IDE terminal and test host Ollama access:
+
+```powershell
+curl http://host.docker.internal:11434/api/tags
+curl http://host.docker.internal:11434/api/generate -d "{\"model\":\"qwen2.5-coder:latest\",\"prompt\":\"Say hello\",\"stream\":false}"
+```
+
 ## Browser IDE Setup On Windows
 
 The IDE workflow uses real `code-server`, not a fake Monaco-only editor.

@@ -19,8 +19,10 @@ from .file_service import (
     local_url_for_stack,
     main_file_for_stack,
     main_run_target_for_stack,
+    optimize_generated_file_set,
     primary_run_command,
     required_preview_paths as _required_preview_paths,
+    validate_generated_files_with_metadata,
 )
 
 
@@ -1441,6 +1443,17 @@ def normalize_preview(
         item for item in normalize_custom_manifest(raw.get("customFiles"), selected_stack, project_kind)
         if item.get("path") not in removable_paths
     ]
+    normalized_raw_files = [
+        item for item in normalize_files(raw.get("files"))
+        if item.get("path") not in removable_paths
+    ]
+    raw_files_for_generation, raw_size_metadata = validate_generated_files_with_metadata(
+        normalized_raw_files,
+        priority_paths=[
+            *protected_paths,
+            *(item.get("path") for item in custom_manifest if item.get("path")),
+        ],
+    )
     validated_files = finalize_preview_files(
         project_name=project_name,
         selected_stack=selected_stack,
@@ -1449,10 +1462,7 @@ def normalize_preview(
         template_family=template_family,
         custom_manifest=custom_manifest,
         project_contract=raw.get("projectContract") if isinstance(raw.get("projectContract"), Mapping) else None,
-        raw_files=[
-            item for item in normalize_files(raw.get("files"))
-            if item.get("path") not in removable_paths
-        ],
+        raw_files=raw_files_for_generation,
     )
     validated_files = [item for item in validated_files if item.get("path") not in removable_paths]
 
@@ -1562,7 +1572,17 @@ def normalize_preview(
             raw_files=complete_files,
             project_contract=preview_payload["projectContract"],
         )
-    preview_payload["files"] = [item for item in complete_files if item.get("path") not in removable_paths]
+    complete_files = [item for item in complete_files if item.get("path") not in removable_paths]
+    optimized_files, size_metadata = optimize_generated_file_set(
+        complete_files,
+        priority_paths=[
+            *protected_paths,
+            *(item.get("path") for item in custom_manifest if item.get("path")),
+        ],
+        inherited_deferred_files=raw_size_metadata.get("deferredFiles", []),
+    )
+    preview_payload["files"] = optimized_files
+    preview_payload.update(size_metadata)
     if template_family:
         preview_payload["templateFamily"] = template_family
     preview_payload["fileTree"] = build_preview_file_tree(
@@ -1592,9 +1612,15 @@ def apply_custom_file_overrides(
         selected_stack=selected_stack,
         project_kind=project_kind,
     )
+    complete_files, size_metadata = optimize_generated_file_set(
+        complete_files,
+        priority_paths=list(required_preview_paths(selected_stack, project_kind, str(preview.get("templateFamily") or ""))),
+        inherited_deferred_files=preview.get("deferredFiles") if isinstance(preview.get("deferredFiles"), Sequence) else [],
+    )
     env_variables = normalize_env_variables(preview.get("envVariables"))
 
     preview["files"] = complete_files
+    preview.update(size_metadata)
     preview["fileTree"] = build_preview_file_tree(
         complete_files,
         include_env_example=bool(env_variables),

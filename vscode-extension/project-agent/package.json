@@ -9,6 +9,7 @@
   },
   "categories": ["Other"],
   "activationEvents": [
+    "onStartupFinished",
     "onView:projectAgent.chatView",
     "onCommand:projectAgent.openChat",
     "onCommand:projectAgent.applyFix"
@@ -53,7 +54,7 @@
       "activitybar": [
         {
           "id": "projectAgent",
-          "title": "Project Agent IDE",
+          "title": "Project Agent",
           "icon": "media/project-agent.svg"
         }
       ]
@@ -66,6 +67,12 @@
         }
       ]
     },
+    "viewsWelcome": [
+      {
+        "view": "projectAgent.chatView",
+        "contents": "Ask Project Agent to explain this workspace, fix the active file, or generate focused code.\\n[Open Chat](command:projectAgent.openChat)"
+      }
+    ],
     "themes": [
       {
         "label": "Project Agent IDE Dark",

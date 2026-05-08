@@ -2,14 +2,23 @@ from __future__ import annotations
 
 import json
 import re
+from math import ceil
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
 
 from app.services.architecture_registry import forbidden_path, registry_entry_for_selected
 
 
-MAX_GENERATED_FILES = 100
+MAX_GENERATED_FILES = 500
 MAX_FILE_SIZE_BYTES = 250 * 1024
+LARGE_PROJECT_WARNING = "Project is very large. Generating optimized structure."
+FILE_VALIDATION_CHUNK_SIZE = 100
+PROJECT_SIZE_TIERS = {
+    "small": 50,
+    "medium": 150,
+    "large": 300,
+    "very_large": MAX_GENERATED_FILES,
+}
 
 SYSTEM_FILENAMES = {
     "README.md",
@@ -75,12 +84,27 @@ def ensure_within_directory(base_dir: Path, candidate: Path) -> bool:
     return resolved_candidate.is_relative_to(resolved_base)
 
 
-def validate_generated_files(files: list[dict[str, str]]) -> list[dict[str, str]]:
-    if len(files) > MAX_GENERATED_FILES:
-        raise ValueError(
-            f"Generated output exceeds the limit of {MAX_GENERATED_FILES} files."
-        )
+def classify_project_size(file_count: int) -> str:
+    if file_count <= PROJECT_SIZE_TIERS["small"]:
+        return "small"
+    if file_count <= PROJECT_SIZE_TIERS["medium"]:
+        return "medium"
+    if file_count <= PROJECT_SIZE_TIERS["large"]:
+        return "large"
+    if file_count <= PROJECT_SIZE_TIERS["very_large"]:
+        return "very_large"
+    return "overflow"
 
+
+def validate_generated_files(files: list[dict[str, str]]) -> list[dict[str, str]]:
+    return validate_generated_files_with_metadata(files)[0]
+
+
+def validate_generated_files_with_metadata(
+    files: list[dict[str, str]],
+    *,
+    priority_paths: Sequence[str] | None = None,
+) -> tuple[list[dict[str, str]], dict[str, Any]]:
     validated: list[dict[str, str]] = []
     seen_paths: set[str] = set()
     for file_entry in files:
@@ -100,7 +124,151 @@ def validate_generated_files(files: list[dict[str, str]]) -> list[dict[str, str]
         seen_paths.add(normalized_path)
         validated.append({"path": normalized_path, "content": content})
 
-    return validated
+    processed_count = len(validated)
+    prioritized = _prioritize_generated_files(validated, priority_paths or [])
+    kept_files = prioritized[:MAX_GENERATED_FILES]
+    deferred_files = prioritized[MAX_GENERATED_FILES:]
+    warnings = [LARGE_PROJECT_WARNING] if deferred_files or processed_count > PROJECT_SIZE_TIERS["large"] else []
+    chunk_count = ceil(max(processed_count, 1) / FILE_VALIDATION_CHUNK_SIZE)
+    metadata = {
+        "projectSizeTier": classify_project_size(processed_count),
+        "generatedFileCount": len(kept_files),
+        "processedFileCount": processed_count,
+        "maxGeneratedFiles": MAX_GENERATED_FILES,
+        "generationWarnings": warnings,
+        "deferredFiles": [{"path": item["path"], "reason": "Deferred from optimized very large project output."} for item in deferred_files],
+        "deferredModules": _deferred_modules_from_files(deferred_files),
+        "partialPackaging": bool(deferred_files),
+        "advancedModulesAvailableLater": bool(deferred_files),
+        "chunkSize": FILE_VALIDATION_CHUNK_SIZE,
+        "chunkCount": chunk_count,
+    }
+    return kept_files, metadata
+
+
+def build_generation_size_metadata(
+    files: Sequence[Mapping[str, Any]],
+    *,
+    deferred_files: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    deferred_files = list(deferred_files or [])
+    generated_count = len(files)
+    processed_count = generated_count + len(deferred_files)
+    warnings = [LARGE_PROJECT_WARNING] if deferred_files or processed_count > PROJECT_SIZE_TIERS["large"] else []
+    return {
+        "projectSizeTier": classify_project_size(processed_count),
+        "generatedFileCount": generated_count,
+        "processedFileCount": processed_count,
+        "maxGeneratedFiles": MAX_GENERATED_FILES,
+        "generationWarnings": warnings,
+        "deferredFiles": list(deferred_files),
+        "deferredModules": _deferred_modules_from_files(deferred_files),
+        "partialPackaging": bool(deferred_files),
+        "advancedModulesAvailableLater": bool(deferred_files),
+        "chunkSize": FILE_VALIDATION_CHUNK_SIZE,
+        "chunkCount": ceil(max(processed_count, 1) / FILE_VALIDATION_CHUNK_SIZE),
+    }
+
+
+def optimize_generated_file_set(
+    files: Sequence[Mapping[str, Any]],
+    *,
+    priority_paths: Sequence[str] | None = None,
+    inherited_deferred_files: Sequence[Mapping[str, Any]] | None = None,
+) -> tuple[list[dict[str, str]], dict[str, Any]]:
+    inherited_deferred = [
+        {"path": str(item.get("path") or ""), "reason": str(item.get("reason") or "Deferred from earlier large-project optimization.")}
+        for item in inherited_deferred_files or []
+        if str(item.get("path") or "").strip()
+    ]
+    optimized_files, metadata = validate_generated_files_with_metadata(
+        [{"path": str(item.get("path") or ""), "content": str(item.get("content") or "")} for item in files],
+        priority_paths=[*(priority_paths or []), "DEFERRED_MODULES.md"],
+    )
+    deferred_files = [*inherited_deferred, *metadata.get("deferredFiles", [])]
+    if deferred_files:
+        optimized_map = {item["path"]: item["content"] for item in optimized_files}
+        optimized_map["DEFERRED_MODULES.md"] = build_deferred_modules_doc(deferred_files)
+        optimized_files, metadata = validate_generated_files_with_metadata(
+            [{"path": path, "content": content} for path, content in optimized_map.items()],
+            priority_paths=[*(priority_paths or []), "DEFERRED_MODULES.md"],
+        )
+        deferred_paths = {str(item.get("path") or "") for item in deferred_files}
+        deferred_paths.update(str(item.get("path") or "") for item in metadata.get("deferredFiles", []))
+        deferred_files = [
+            {"path": path, "reason": "Deferred from optimized very large project output."}
+            for path in sorted(path for path in deferred_paths if path)
+        ]
+    final_metadata = build_generation_size_metadata(optimized_files, deferred_files=deferred_files)
+    return optimized_files, final_metadata
+
+
+def build_deferred_modules_doc(deferred_files: Sequence[Mapping[str, Any]]) -> str:
+    paths = sorted({str(item.get("path") or "").strip() for item in deferred_files if str(item.get("path") or "").strip()})
+    lines = [
+        "# Deferred Modules",
+        "",
+        LARGE_PROJECT_WARNING,
+        "",
+        "Project Agent generated the runnable core project first. The advanced files below were deferred and can be generated later from the assistant or a follow-up generation pass.",
+        "",
+    ]
+    if not paths:
+        lines.append("No files were deferred.")
+    else:
+        lines.append("## Deferred Files")
+        lines.append("")
+        lines.extend(f"- `{path}`" for path in paths)
+    lines.append("")
+    lines.append("## Next Step")
+    lines.append("")
+    lines.append("Ask Project Agent to generate one deferred module at a time, then review and apply the changes inside the IDE.")
+    return "\n".join(lines) + "\n"
+
+
+def _prioritize_generated_files(
+    files: Sequence[Mapping[str, str]],
+    priority_paths: Sequence[str],
+) -> list[dict[str, str]]:
+    priority = {str(path).replace("\\", "/").strip(): index for index, path in enumerate(priority_paths)}
+
+    def sort_key(item: Mapping[str, str]) -> tuple[int, int, str]:
+        path = str(item.get("path") or "")
+        if path in priority:
+            return (0, priority[path], path)
+        if path in SYSTEM_FILENAMES or path == "DEFERRED_MODULES.md":
+            return (1, 0, path)
+        lowered = path.lower()
+        name = Path(path).name.lower()
+        if name in {".env", ".env.example", "requirements.txt", "package.json", "pom.xml", "pyproject.toml", "vite.config.js", "tsconfig.json"}:
+            return (2, 0, path)
+        if name.startswith(("run.", "setup.")) or name in {"run.bat", "run.sh", "setup.bat", "setup.sh"}:
+            return (3, 0, path)
+        if name in {"main.py", "app.py", "server.js", "index.js", "main.jsx", "main.tsx", "app.jsx", "app.tsx", "index.html", "application.java"}:
+            return (4, 0, path)
+        if any(part in lowered for part in ("/routes/", "/routers/", "/controllers/", "/controller/", "/services/", "/service/")):
+            return (5, 0, path)
+        return (6, 0, path)
+
+    return [dict(item) for item in sorted(files, key=sort_key)]
+
+
+def _deferred_modules_from_files(files: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
+    modules: dict[str, dict[str, str]] = {}
+    for item in files:
+        path = str(item.get("path") or "").strip()
+        if not path:
+            continue
+        parts = path.replace("\\", "/").split("/")
+        module_name = parts[0] if len(parts) == 1 else "/".join(parts[:2])
+        modules.setdefault(
+            module_name,
+            {
+                "name": module_name,
+                "purpose": "Advanced module deferred from the optimized large-project core package.",
+            },
+        )
+    return list(modules.values())
 
 
 def build_required_docs(

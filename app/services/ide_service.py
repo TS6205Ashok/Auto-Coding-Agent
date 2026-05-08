@@ -23,8 +23,11 @@ IDE_IMAGE_NAME = os.getenv("PROJECT_AGENT_IDE_IMAGE", "project-agent-ide")
 IDE_CONTAINER_PORT = 8080
 DEFAULT_IDE_HOST = os.getenv("PROJECT_AGENT_IDE_HOST", "127.0.0.1")
 DEFAULT_OLLAMA_URL = "http://host.docker.internal:11434/api/generate"
+HOST_OLLAMA_TAGS_URL = "http://127.0.0.1:11434/api/tags"
 DOCKER_UNAVAILABLE_MESSAGE = "Docker Desktop is not running. Please start Docker and try again."
+OLLAMA_UNAVAILABLE_WARNING = "Ollama is not running. Start Ollama before using Project Agent."
 DEFAULT_IDLE_TIMEOUT_MINUTES = 45
+PROJECT_AGENT_IDE_PASSWORD = "1234$"
 PROJECT_AGENT_IDE_THEME = "Project Agent IDE Dark"
 PROJECT_AGENT_EXTENSION_ID = "project-agent.project-agent"
 
@@ -114,6 +117,14 @@ This workspace is powered by real code-server, so you still have the VS Code fil
 3. Use the Explorer to inspect generated files.
 4. Use the integrated terminal to run setup and start commands from the project README.
 
+## Login
+
+Project Agent IDE uses code-server password auth.
+
+```text
+1234$
+```
+
 ## Project Agent Assistant
 
 - **Open Chat** focuses the Project Agent assistant.
@@ -130,6 +141,24 @@ http://host.docker.internal:11434/api/generate
 ```
 
 Make sure Ollama is running on the host and the configured model is available.
+
+Test Ollama from the IDE terminal:
+
+```bash
+curl http://host.docker.internal:11434/api/tags
+```
+
+Test generation:
+
+```bash
+curl http://host.docker.internal:11434/api/generate -d "{{\"model\":\"qwen2.5-coder:latest\",\"prompt\":\"Say hello\",\"stream\":false}}"
+```
+
+If the model is missing, run this on the host:
+
+```bash
+ollama pull qwen2.5-coder
+```
 
 ## ZIP and Workspace
 
@@ -195,7 +224,7 @@ def workspace_exists(project_id: str, generated_projects_dir: Path) -> bool:
 
 def build_docker_run_command(project_id: str, project_dir: Path, port: int, password: str = "") -> list[str]:
     container_name = f"project-agent-ide-{project_id}"
-    password = password or generate_ide_password()
+    password = password or PROJECT_AGENT_IDE_PASSWORD
     return [
         "docker",
         "run",
@@ -212,6 +241,8 @@ def build_docker_run_command(project_id: str, project_dir: Path, port: int, pass
         f"PROJECT_AGENT_FALLBACK_MODEL={os.getenv('PROJECT_AGENT_FALLBACK_MODEL', 'codellama:7b')}",
         "-e",
         f"PROJECT_AGENT_OLLAMA_URL={os.getenv('PROJECT_AGENT_OLLAMA_URL', DEFAULT_OLLAMA_URL)}",
+        "-e",
+        f"PASSWORD={password}",
         IDE_IMAGE_NAME,
     ]
 
@@ -234,7 +265,7 @@ def start_or_reuse_ide(project_id: str, generated_projects_dir: Path) -> IdeInst
         remove_container_by_name(container_name)
 
     port = find_free_port()
-    password = generate_ide_password()
+    password = PROJECT_AGENT_IDE_PASSWORD
     command = build_docker_run_command(project_id, project_dir, port, password)
     result = run_docker_command(command[1:])
     if result.returncode != 0:
@@ -291,6 +322,22 @@ def ide_status(project_id: str) -> dict[str, Any]:
         "url": instance.url if instance else "",
         "status": instance.status if instance else "not_started",
         "password": instance.password if instance else "",
+        "ollamaWarning": "" if check_host_ollama() else OLLAMA_UNAVAILABLE_WARNING,
+    }
+
+
+def ide_preflight(project_id: str, generated_projects_dir: Path) -> dict[str, Any]:
+    project_id = validate_project_id(project_id)
+    project_dir = project_dir_for(project_id, generated_projects_dir)
+    if not project_dir.is_dir():
+        raise FileNotFoundError("Generated project not found.")
+    ollama_running = check_host_ollama()
+    return {
+        "projectId": project_id,
+        "workspaceReady": True,
+        "password": PROJECT_AGENT_IDE_PASSWORD,
+        "ollamaRunning": ollama_running,
+        "warning": "" if ollama_running else OLLAMA_UNAVAILABLE_WARNING,
     }
 
 
@@ -374,7 +421,15 @@ def _container_running(container_id: str) -> bool:
 
 
 def generate_ide_password() -> str:
-    return "123456"
+    return PROJECT_AGENT_IDE_PASSWORD
+
+
+def check_host_ollama(timeout_seconds: float = 1.5) -> bool:
+    try:
+        with urlopen(HOST_OLLAMA_TAGS_URL, timeout=timeout_seconds) as response:
+            return 200 <= int(response.status) < 500
+    except (OSError, URLError):
+        return False
 
 
 def run_docker_command(args: list[str]) -> subprocess.CompletedProcess[str]:

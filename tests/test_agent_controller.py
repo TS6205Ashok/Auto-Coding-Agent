@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from app.agents.orchestrator_agent import orchestrator_agent
 from app.main import app
+from app.services import file_service
 from app.services import ide_service
 from app.services.agent_controller import agent_controller
 
@@ -2076,6 +2077,9 @@ class AgentControllerTests(unittest.TestCase):
         self.assertEqual(ide_doc.status_code, 200)
         self.assertIn("Project Agent IDE", ide_doc.json()["content"])
         self.assertIn("real code-server", ide_doc.json()["content"])
+        self.assertIn("1234$", ide_doc.json()["content"])
+        self.assertIn("curl http://host.docker.internal:11434/api/tags", ide_doc.json()["content"])
+        self.assertIn("qwen2.5-coder:latest", ide_doc.json()["content"])
 
         settings_response = self.client.get(f"/api/file/{project_id}", params={"path": ".vscode/settings.json"})
         self.assertEqual(settings_response.status_code, 200)
@@ -2088,6 +2092,72 @@ class AgentControllerTests(unittest.TestCase):
         self.assertEqual(extensions_response.status_code, 200)
         extensions = json.loads(extensions_response.json()["content"])
         self.assertIn("project-agent.project-agent", extensions["recommendations"])
+
+    def test_project_size_tiers_and_large_file_optimization(self) -> None:
+        self.assertEqual(file_service.classify_project_size(20), "small")
+        self.assertEqual(file_service.classify_project_size(100), "medium")
+        self.assertEqual(file_service.classify_project_size(250), "large")
+        self.assertEqual(file_service.classify_project_size(400), "very_large")
+        self.assertEqual(file_service.classify_project_size(600), "overflow")
+
+        files = [
+            {"path": f"advanced/module_{index}.py", "content": f"VALUE = {index}\n"}
+            for index in range(600)
+        ]
+        files[350] = {"path": "backend/app/main.py", "content": "print('core')\n"}
+        optimized, metadata = file_service.optimize_generated_file_set(
+            files,
+            priority_paths=["backend/app/main.py"],
+        )
+
+        paths = {item["path"] for item in optimized}
+        self.assertEqual(len(optimized), file_service.MAX_GENERATED_FILES)
+        self.assertIn("backend/app/main.py", paths)
+        self.assertIn("DEFERRED_MODULES.md", paths)
+        self.assertEqual(metadata["projectSizeTier"], "overflow")
+        self.assertTrue(metadata["partialPackaging"])
+        self.assertTrue(metadata["advancedModulesAvailableLater"])
+        self.assertIn(file_service.LARGE_PROJECT_WARNING, metadata["generationWarnings"])
+        self.assertTrue(metadata["deferredFiles"])
+
+    def test_generated_file_limit_regressions_keep_security_strict(self) -> None:
+        file_service.validate_generated_files(
+            [{"path": f"src/file_{index}.py", "content": "pass\n"} for index in range(101)]
+        )
+        self.assertEqual(
+            len(file_service.validate_generated_files(
+                [{"path": f"src/file_{index}.py", "content": "pass\n"} for index in range(500)]
+            )),
+            500,
+        )
+
+        with self.assertRaises(ValueError):
+            file_service.validate_generated_files([{"path": "../escape.py", "content": "pass\n"}])
+        with self.assertRaises(ValueError):
+            file_service.validate_generated_files([{"path": "src/huge.py", "content": "x" * (file_service.MAX_FILE_SIZE_BYTES + 1)}])
+
+    def test_zip_succeeds_for_optimized_large_preview_with_deferred_modules_doc(self) -> None:
+        with patch.dict(os.environ, {"OLLAMA_BASE_URL": ""}, clear=False):
+            preview = asyncio.run(agent_controller.generate_files("Build a todo API", generation_mode="fast"))
+        preview["files"] = [
+            *preview["files"],
+            *[
+                {"path": f"advanced/module_{index}.py", "content": f"VALUE = {index}\n"}
+                for index in range(550)
+            ],
+        ]
+
+        response = self.client.post("/api/zip", json={"preview": preview})
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        zip_path = Path("generated") / payload["filename"]
+        with ZipFile(zip_path) as archive:
+            names = archive.namelist()
+            deferred_name = next(name for name in names if name.endswith("DEFERRED_MODULES.md"))
+            deferred_doc = archive.read(deferred_name).decode("utf-8")
+
+        self.assertIn(file_service.LARGE_PROJECT_WARNING, deferred_doc)
+        self.assertIn("advanced/module_", deferred_doc)
 
     def test_ide_rejects_unsafe_project_ids_and_paths(self) -> None:
         bad_id_response = self.client.get("/open-ide/not-a-uuid")
@@ -2109,7 +2179,8 @@ class AgentControllerTests(unittest.TestCase):
         self.assertEqual(command[0:3], ["docker", "run", "-d"])
         self.assertIn("project-agent-ide", command)
         self.assertTrue(any("host.docker.internal:11434/api/generate" in item for item in command))
-        self.assertNotIn("PASSWORD=", " ".join(command))
+        self.assertIn("-e", command)
+        self.assertIn("PASSWORD=1234$", command)
 
     def test_open_ide_reuses_container_and_close_removes_it(self) -> None:
         project_id = "00000000-0000-4000-8000-000000000001"
@@ -2138,10 +2209,12 @@ class AgentControllerTests(unittest.TestCase):
                     self.assertEqual(response.status_code, 307)
                     second = self.client.get(f"/open-ide/{project_id}", follow_redirects=False)
                     self.assertEqual(second.status_code, 307)
-                    status = self.client.get(f"/api/ide-status/{project_id}")
+                    with patch("app.services.ide_service.check_host_ollama", return_value=False):
+                        status = self.client.get(f"/api/ide-status/{project_id}")
                     self.assertEqual(status.status_code, 200)
                     self.assertEqual(status.json()["status"], "running")
-                    self.assertTrue(status.json()["password"])
+                    self.assertEqual(status.json()["password"], "1234$")
+                    self.assertEqual(status.json()["ollamaWarning"], ide_service.OLLAMA_UNAVAILABLE_WARNING)
                     close = self.client.post(f"/close-ide/{project_id}")
                     self.assertEqual(close.status_code, 200)
 
@@ -2206,6 +2279,22 @@ class AgentControllerTests(unittest.TestCase):
         self.assertEqual(response.json()["detail"], ide_service.DOCKER_UNAVAILABLE_MESSAGE)
         self.assertTrue(any(command[:3] == ["docker", "rm", "-f"] for command in calls))
 
+    def test_ide_preflight_warns_when_ollama_is_unavailable(self) -> None:
+        project_id = "00000000-0000-4000-8000-000000000007"
+        project_dir = Path("generated_projects") / project_id
+        project_dir.mkdir(parents=True, exist_ok=True)
+        (project_dir / "README.md").write_text("hello", encoding="utf-8")
+
+        with patch("app.services.ide_service.check_host_ollama", return_value=False):
+            response = self.client.get(f"/api/ide-preflight/{project_id}")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["workspaceReady"])
+        self.assertFalse(payload["ollamaRunning"])
+        self.assertEqual(payload["password"], "1234$")
+        self.assertEqual(payload["warning"], ide_service.OLLAMA_UNAVAILABLE_WARNING)
+
     def test_idle_cleanup_removes_old_instances(self) -> None:
         old_id = "00000000-0000-4000-8000-000000000005"
         fresh_id = "00000000-0000-4000-8000-000000000006"
@@ -2253,7 +2342,9 @@ class AgentControllerTests(unittest.TestCase):
         self.assertIn("projectAgent", package_json["contributes"]["viewsContainers"]["activitybar"][0]["id"])
         self.assertIn("projectAgent.chatView", json.dumps(package_json["contributes"]["views"]))
         self.assertIn("projectAgent.model", package_json["contributes"]["configuration"]["properties"])
-        self.assertEqual(package_json["contributes"]["viewsContainers"]["activitybar"][0]["title"], "Project Agent IDE")
+        self.assertIn("onStartupFinished", package_json["activationEvents"])
+        self.assertEqual(package_json["contributes"]["viewsContainers"]["activitybar"][0]["title"], "Project Agent")
+        self.assertEqual(package_json["contributes"]["viewsWelcome"][0]["view"], "projectAgent.chatView")
         self.assertEqual(package_json["contributes"]["themes"][0]["label"], "Project Agent IDE Dark")
         self.assertEqual(package_json["contributes"]["themes"][0]["path"], "./themes/project-agent-ide-dark.json")
         self.assertEqual(theme["name"], "Project Agent IDE Dark")
@@ -2261,11 +2352,15 @@ class AgentControllerTests(unittest.TestCase):
         self.assertIn("--allow-missing-repository", package_json["scripts"]["package"])
         self.assertIn("FROM codercom/code-server:latest", dockerfile)
         self.assertIn("code-server --install-extension /extensions/project-agent.vsix", dockerfile)
-        self.assertIn('"--auth", "none"', dockerfile)
+        self.assertNotIn("--auth", dockerfile)
+        self.assertIn('"0.0.0.0:8080"', dockerfile)
         self.assertIn('"/workspace"', dockerfile)
         self.assertIn("host.docker.internal:11434/api/generate", dockerfile)
         self.assertIn("host.docker.internal:11434/api/generate", extension_ts)
-        self.assertIn("Ollama is not running. Start Ollama and make sure qwen2.5-coder is installed.", extension_ts)
+        self.assertIn("projectAgent.chatView.focus", extension_ts)
+        self.assertIn("Extension message handler failed", extension_ts)
+        self.assertIn("Network request failed", extension_ts)
+        self.assertIn("Ollama is not reachable or the configured models are not installed.", extension_ts)
         self.assertIn("Apply Fix", extension_ts)
         self.assertIn("Insert as New File", extension_ts)
 

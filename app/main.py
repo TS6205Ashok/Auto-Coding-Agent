@@ -16,6 +16,7 @@ from .services.file_service import ensure_within_directory
 from .services.ide_service import (
     close_ide,
     create_workspace_zip,
+    ide_preflight,
     ide_status,
     list_workspace_files,
     read_workspace_file,
@@ -379,6 +380,17 @@ async def open_ide(project_id: str) -> RedirectResponse:
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return RedirectResponse(instance.url)
+
+
+@app.get("/api/ide-preflight/{project_id}")
+async def project_ide_preflight(project_id: str) -> JSONResponse:
+    try:
+        status = ide_preflight(project_id, GENERATED_PROJECTS_DIR)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return JSONResponse(status)
 
 
 @app.post("/close-ide/{project_id}")
