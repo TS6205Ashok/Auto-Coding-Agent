@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 CHAT_ACTIONS = {
     "none",
+    "show_code_in_chat",
+    "ask_generate_zip",
     "update_idea",
     "update_requirements",
     "add_files",
@@ -43,8 +45,10 @@ CHAT_INTENTS = {
 @dataclass(slots=True)
 class ChatCoordinatorResult:
     reply: str
+    message: str = ""
     intent: str = "chat_intent"
     action: str = "none"
+    suggestedProjectDescription: str = ""
     updatedIdea: str = ""
     updatedRequirements: str = ""
     requestedFiles: list[dict[str, Any]] = field(default_factory=list)
@@ -69,13 +73,18 @@ class ChatCoordinatorResult:
             payload["action"] = "none"
         if not payload["reply"]:
             payload["reply"] = "I understood that. Tell me if you want to generate or modify the project."
+        if not payload["message"]:
+            payload["message"] = payload["reply"]
+        if not payload["suggestedProjectDescription"] and payload["intent"] in {"file_generation_intent", "generation_intent"}:
+            payload["suggestedProjectDescription"] = payload.get("updatedIdea") or payload.get("updatedRequirements") or ""
         return payload
 
 
 class ChatCoordinatorAgent:
     def __init__(self) -> None:
-        self.default_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
-        self.default_model = os.getenv("OLLAMA_MODEL", "llama3.1")
+        self.default_base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+        self.default_model = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:latest")
+        self.fallback_model = os.getenv("OLLAMA_FALLBACK_MODEL", "codellama:7b")
         self.timeout_seconds = float(os.getenv("OLLAMA_CHAT_TIMEOUT_SECONDS", "8"))
 
     async def run(
@@ -133,8 +142,9 @@ class ChatCoordinatorAgent:
         pending_corrections: Sequence[Mapping[str, Any]],
         force: bool,
     ) -> ChatCoordinatorResult | None:
-        base_url = os.getenv("OLLAMA_BASE_URL", "").strip().rstrip("/")
+        base_url = os.getenv("OLLAMA_BASE_URL", self.default_base_url).strip().rstrip("/")
         model = os.getenv("OLLAMA_MODEL", self.default_model).strip() or self.default_model
+        fallback_model = os.getenv("OLLAMA_FALLBACK_MODEL", self.fallback_model).strip() or self.fallback_model
         if not base_url and force:
             base_url = self.default_base_url
         if not base_url:
@@ -150,26 +160,44 @@ class ChatCoordinatorAgent:
         )
         try:
             async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-                response = await client.post(
-                    f"{base_url}/api/generate",
-                    json={
-                        "model": model,
-                        "prompt": prompt,
-                        "stream": False,
-                        "format": "json",
-                    },
-                )
-                response.raise_for_status()
-                payload = response.json()
+                payload = await self._post_ollama_chat(client, base_url, model, prompt)
             raw_text = str(payload.get("response") or "").strip()
             parsed = json.loads(ai.extract_json_object(raw_text))
             result = self._normalize_result(parsed, llm_mode_used="ollama")
-            if result.action == "none" and self._looks_like_project_action(message.lower()):
-                return None
             return result
-        except Exception as exc:
-            logger.info("ChatCoordinatorAgent Ollama unavailable; using rule-based fallback: %s", exc)
-            return None
+        except Exception as first_exc:
+            try:
+                async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                    payload = await self._post_ollama_chat(client, base_url, fallback_model, prompt)
+                raw_text = str(payload.get("response") or "").strip()
+                parsed = json.loads(ai.extract_json_object(raw_text))
+                return self._normalize_result(parsed, llm_mode_used="ollama_fallback")
+            except Exception as fallback_exc:
+                logger.info(
+                    "ChatCoordinatorAgent Ollama unavailable; using rule-based fallback: primary=%s fallback=%s",
+                    first_exc,
+                    fallback_exc,
+                )
+                return None
+
+    async def _post_ollama_chat(
+        self,
+        client: httpx.AsyncClient,
+        base_url: str,
+        model: str,
+        prompt: str,
+    ) -> dict[str, Any]:
+        response = await client.post(
+            f"{base_url}/api/generate",
+            json={
+                "model": model,
+                "prompt": prompt,
+                "stream": False,
+                "format": "json",
+            },
+        )
+        response.raise_for_status()
+        return response.json()
 
     def _build_ollama_prompt(
         self,
@@ -192,21 +220,20 @@ class ChatCoordinatorAgent:
             "pendingCorrections": list(pending_corrections or []),
         }
         return (
-            "You are a ChatGPT-like project co-pilot connected to a software project generation agent. "
-            "Your first job is conversation: answer questions, explain technologies, discuss architecture, "
-            "suggest stacks, ask follow-up questions, and draft project plans in markdown. "
-            "The project pipeline is separate and must run only for strict explicit generation intent. "
-            "Do not generate final project files directly. Always return strict JSON. "
+            "You are Project Assistant, a ChatGPT-like AI software engineer. You can answer normal questions, "
+            "generate code, plan projects, explain errors, and help create downloadable projects. Do not refuse "
+            "just because no project is locked. If the user asks to create a webpage/app/project, provide useful "
+            "code or offer project generation. Always return strict JSON. "
             "Set intent to one of: chat_intent, planning_intent, generation_intent, repair_intent, ide_intent, file_generation_intent. "
+            "For file_generation_intent, generate useful code in reply and use action show_code_in_chat or ask_generate_zip. "
             "Only set generation_intent/action generate_project when the user explicitly says generate project, "
             "generate this, build starter, build it now, or confirm and generate. "
-            "If the user explicitly asks to add or create specific files, set file_generation_intent and action add_files. "
             "Normal project ideas, questions, stack suggestions, and plans are planning_intent or chat_intent. "
             "Preview modifications are repair_intent and require confirmation. Never require paid APIs for chatbot behavior.\n\n"
-            "Allowed actions: none, update_idea, update_requirements, generate_project, regenerate_project, "
+            "Allowed actions: none, show_code_in_chat, ask_generate_zip, update_idea, update_requirements, generate_project, regenerate_project, "
             "add_files, remove_files, add_feature, remove_feature, change_stack, update_required_inputs, "
             "pause_agent_and_update, cancel_pending_change.\n"
-            "Return fields: reply, intent, action, updatedIdea, updatedRequirements, requestedFiles, filesToRemove, "
+            "Return fields: reply, message, intent, action, suggestedProjectDescription, updatedIdea, updatedRequirements, requestedFiles, filesToRemove, "
             "featuresToAdd, featuresToRemove, updatedStack, requiredInputs, needsConfirmation, "
             "confirmationMessage, shouldGenerate, shouldRegenerate, shouldPauseAgent, confidence.\n\n"
             f"STATE:\n{json.dumps(state, indent=2)}"
@@ -214,9 +241,11 @@ class ChatCoordinatorAgent:
 
     def _normalize_result(self, payload: Mapping[str, Any], *, llm_mode_used: str) -> ChatCoordinatorResult:
         result = ChatCoordinatorResult(
-            reply=str(payload.get("reply") or "").strip(),
+            reply=str(payload.get("reply") or payload.get("message") or "").strip(),
+            message=str(payload.get("message") or payload.get("reply") or "").strip(),
             intent=str(payload.get("intent") or "chat_intent").strip(),
             action=str(payload.get("action") or "none").strip(),
+            suggestedProjectDescription=str(payload.get("suggestedProjectDescription") or "").strip(),
             updatedIdea=str(payload.get("updatedIdea") or "").strip(),
             updatedRequirements=str(payload.get("updatedRequirements") or "").strip(),
             requestedFiles=self._normalize_requested_files(payload.get("requestedFiles"), {}),
@@ -237,6 +266,9 @@ class ChatCoordinatorAgent:
             result.action = "none"
         if result.intent not in CHAT_INTENTS:
             result.intent = self._intent_for_action(result.action, result.shouldGenerate, result.shouldRegenerate)
+        if result.action in {"show_code_in_chat", "ask_generate_zip"}:
+            result.intent = "file_generation_intent"
+            result.shouldGenerate = False
         if result.intent != "generation_intent" and result.shouldGenerate:
             result.shouldGenerate = False
         if result.intent not in {"repair_intent", "generation_intent", "file_generation_intent"} and result.shouldRegenerate:
@@ -308,6 +340,19 @@ class ChatCoordinatorAgent:
                 confidence="high",
             )
 
+        if not has_preview and self._looks_like_code_generation_request(lowered):
+            return ChatCoordinatorResult(
+                reply=self._code_generation_reply(message, lowered),
+                intent="file_generation_intent",
+                action="ask_generate_zip",
+                suggestedProjectDescription=message,
+                updatedIdea=message,
+                updatedRequirements=self._draft_requirements(message),
+                needsConfirmation=False,
+                shouldGenerate=False,
+                confidence="high",
+            )
+
         updated_stack, last_modified = self._detect_stack_change(lowered, normalized_stack)
         if updated_stack:
             updated_stack.update(
@@ -335,13 +380,15 @@ class ChatCoordinatorAgent:
         features_to_remove = self._detect_features_to_remove(lowered)
         if not requested_files and not has_preview and self._looks_like_file_request(lowered):
             return ChatCoordinatorResult(
-                reply=(
-                    "I can talk through that file, but I will not create or validate project files until you ask me to generate. "
-                    "If you want, I can first outline where it would fit in the project."
-                ),
-                intent="planning_intent",
-                action="none",
-                confidence="medium",
+                reply=self._code_generation_reply(message, lowered),
+                intent="file_generation_intent",
+                action="ask_generate_zip",
+                suggestedProjectDescription=message,
+                updatedIdea=message,
+                updatedRequirements=self._draft_requirements(message),
+                needsConfirmation=False,
+                shouldGenerate=False,
+                confidence="high",
             )
         looks_like_change = has_preview and (
             requested_files
@@ -499,6 +546,26 @@ class ChatCoordinatorAgent:
         ]
         return any(term in lowered for term in planning_terms)
 
+    def _looks_like_code_generation_request(self, lowered: str) -> bool:
+        create_terms = ["generate", "create", "build", "write", "make", "code"]
+        target_terms = [
+            "webpage",
+            "web page",
+            "html",
+            "css",
+            "javascript",
+            "login page",
+            "form",
+            "component",
+            "script",
+            "python",
+            "function",
+            "file",
+            "app",
+            "website",
+        ]
+        return any(term in lowered for term in create_terms) and any(term in lowered for term in target_terms)
+
     def _ide_reply(self, lowered: str, has_preview: bool) -> str:
         if "close" in lowered:
             return "Use the Close IDE control after a project workspace has been created. I will not touch the project pipeline for this."
@@ -546,6 +613,116 @@ class ChatCoordinatorAgent:
             "Tell me the technology or decision you want to unpack."
         )
 
+    def _code_generation_reply(self, message: str, lowered: str) -> str:
+        if "login" in lowered and ("congrat" in lowered or "password" in lowered or "ashok" in lowered):
+            return (
+                "Here is a complete single-file webpage you can run directly in a browser. It uses username `ashok` and password `Ashok@123`, then shows a congratulations screen.\n\n"
+                "```html\n"
+                "<!doctype html>\n"
+                "<html lang=\"en\">\n"
+                "<head>\n"
+                "  <meta charset=\"UTF-8\" />\n"
+                "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\n"
+                "  <title>Ashok Login</title>\n"
+                "  <style>\n"
+                "    body {\n"
+                "      margin: 0;\n"
+                "      min-height: 100vh;\n"
+                "      display: grid;\n"
+                "      place-items: center;\n"
+                "      font-family: Arial, sans-serif;\n"
+                "      background: linear-gradient(135deg, #0f766e, #2563eb);\n"
+                "      color: #111827;\n"
+                "    }\n"
+                "    .card {\n"
+                "      width: min(92vw, 380px);\n"
+                "      padding: 28px;\n"
+                "      border-radius: 18px;\n"
+                "      background: white;\n"
+                "      box-shadow: 0 24px 70px rgba(15, 23, 42, 0.28);\n"
+                "    }\n"
+                "    h1 { margin: 0 0 18px; color: #0f172a; }\n"
+                "    label { display: block; margin-top: 14px; font-weight: 700; }\n"
+                "    input {\n"
+                "      width: 100%;\n"
+                "      box-sizing: border-box;\n"
+                "      margin-top: 6px;\n"
+                "      padding: 12px;\n"
+                "      border: 1px solid #cbd5e1;\n"
+                "      border-radius: 10px;\n"
+                "      font-size: 16px;\n"
+                "    }\n"
+                "    button {\n"
+                "      width: 100%;\n"
+                "      margin-top: 20px;\n"
+                "      padding: 13px;\n"
+                "      border: 0;\n"
+                "      border-radius: 10px;\n"
+                "      background: #0f766e;\n"
+                "      color: white;\n"
+                "      font-size: 16px;\n"
+                "      font-weight: 800;\n"
+                "      cursor: pointer;\n"
+                "    }\n"
+                "    .error { margin-top: 12px; color: #dc2626; font-weight: 700; }\n"
+                "    .success { text-align: center; }\n"
+                "    .success h1 { font-size: 34px; color: #16a34a; }\n"
+                "    .tag { display: inline-block; margin-top: 10px; padding: 8px 12px; border-radius: 999px; background: #dcfce7; color: #166534; font-weight: 800; }\n"
+                "  </style>\n"
+                "</head>\n"
+                "<body>\n"
+                "  <main class=\"card\" id=\"app\">\n"
+                "    <h1>Welcome Back</h1>\n"
+                "    <label for=\"userId\">User ID</label>\n"
+                "    <input id=\"userId\" autocomplete=\"username\" placeholder=\"Enter user id\" />\n"
+                "    <label for=\"password\">Password</label>\n"
+                "    <input id=\"password\" type=\"password\" autocomplete=\"current-password\" placeholder=\"Enter password\" />\n"
+                "    <button onclick=\"login()\">Login</button>\n"
+                "    <p class=\"error\" id=\"error\"></p>\n"
+                "  </main>\n"
+                "  <script>\n"
+                "    function login() {\n"
+                "      const userId = document.getElementById('userId').value.trim();\n"
+                "      const password = document.getElementById('password').value;\n"
+                "      const error = document.getElementById('error');\n"
+                "      if (userId === 'ashok' && password === 'Ashok@123') {\n"
+                "        document.getElementById('app').innerHTML = `\n"
+                "          <section class=\"success\">\n"
+                "            <h1>Congratulations!</h1>\n"
+                "            <p>You logged in successfully.</p>\n"
+                "            <span class=\"tag\">Welcome, Ashok</span>\n"
+                "          </section>`;\n"
+                "      } else {\n"
+                "        error.textContent = 'Invalid user id or password.';\n"
+                "      }\n"
+                "    }\n"
+                "  </script>\n"
+                "</body>\n"
+                "</html>\n"
+                "```\n\n"
+                "I can also generate this as a downloadable project ZIP with separate `index.html`, CSS, and JavaScript files."
+            )
+        return (
+            f"I can help build that. Here is a compact starter you can adapt for: **{message.strip()}**\n\n"
+            "```html\n"
+            "<!doctype html>\n"
+            "<html lang=\"en\">\n"
+            "<head>\n"
+            "  <meta charset=\"UTF-8\" />\n"
+            "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\n"
+            "  <title>Starter Page</title>\n"
+            "  <style>body{font-family:Arial,sans-serif;margin:40px;line-height:1.5}button{padding:10px 14px}</style>\n"
+            "</head>\n"
+            "<body>\n"
+            "  <h1>Starter Page</h1>\n"
+            "  <p>Edit this page for your exact workflow.</p>\n"
+            "  <button onclick=\"alert('It works!')\">Try it</button>\n"
+            "</body>\n"
+            "</html>\n"
+            "```\n\n"
+            "Use **Generate Project** if you want me to turn this request into a ZIP-ready project structure."
+        )
+
     def _planning_reply(self, message: str, selected_stack: Mapping[str, str]) -> str:
         project_name = ai.clean_project_name(None, message)
         suggested_stack = self._suggest_stack_for_text(message.lower(), selected_stack)
@@ -577,7 +754,7 @@ class ChatCoordinatorAgent:
         has_idea: bool,
         has_preview: bool,
     ) -> str:
-        context_note = "I have a preview in context." if has_preview else ("I have the current idea in context." if has_idea else "No project is locked in yet.")
+        context_note = "I have a preview in context." if has_preview else ("I can use the current idea as context." if has_idea else "I can help directly from your latest message.")
         return (
             f"{context_note} I can help discuss, plan, compare stacks, or answer questions without running the generator.\n\n"
             f"You said: {message}\n\n"

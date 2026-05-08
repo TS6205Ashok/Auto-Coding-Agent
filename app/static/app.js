@@ -105,6 +105,7 @@ let chatPendingCorrections = [];
 let chatRequestedFiles = [];
 let chatFilesToRemove = [];
 let chatUpdatedStack = null;
+let pendingProjectDescription = "";
 let chatMode = "idea_discussion";
 let chatLinkedPreviewId = "";
 let isAgentRunning = false;
@@ -221,6 +222,7 @@ function resetProjectContractStateForNewIdea(nextIdea, forceReset = false) {
   chatFilesToRemove = [];
   chatUpdatedStack = null;
   chatLinkedPreviewId = "";
+  pendingProjectDescription = "";
   pendingAgentUpdate = null;
   isApplyingPendingAgentUpdate = false;
   lastChatAction = null;
@@ -871,7 +873,10 @@ async function handleChatSend() {
     lastChatAction = response;
     llmModeUsed = response.llmModeUsed || "free_rule_based";
     chatModeBadge.textContent = llmModeUsed === "ollama" ? "Ollama Mode" : "Free Rule Mode";
-    appendChatMessage("assistant", response.reply || "I understood that.");
+    appendChatMessage("assistant", response.message || response.reply || "I understood that.");
+    if (response.intent === "file_generation_intent") {
+      pendingProjectDescription = response.suggestedProjectDescription || response.updatedIdea || response.updatedRequirements || message;
+    }
     renderChatActions(response);
     if (response.intent === "planning_intent" && response.action === "update_requirements" && !response.needsConfirmation) {
       chatDraftIdea = response.updatedIdea || message;
@@ -931,12 +936,41 @@ function renderChatMessages() {
     bubble.className = `chat-message ${message.role === "user" ? "user" : "assistant"}`;
     if (message.role === "assistant") {
       bubble.innerHTML = renderSafeMarkdown(message.content);
+      enhanceCodeBlocks(bubble);
     } else {
       bubble.textContent = message.content;
     }
     chatMessagesElement.appendChild(bubble);
   });
   chatMessagesElement.scrollTop = chatMessagesElement.scrollHeight;
+}
+
+function enhanceCodeBlocks(container) {
+  container.querySelectorAll("pre").forEach((pre) => {
+    if (pre.querySelector(".copy-code-button")) {
+      return;
+    }
+    const code = pre.querySelector("code");
+    if (!code) {
+      return;
+    }
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "copy-code-button";
+    button.textContent = "Copy";
+    button.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(code.textContent || "");
+        button.textContent = "Copied";
+        setTimeout(() => {
+          button.textContent = "Copy";
+        }, 1200);
+      } catch {
+        button.textContent = "Copy failed";
+      }
+    });
+    pre.appendChild(button);
+  });
 }
 
 function renderSafeMarkdown(content) {
@@ -974,6 +1008,10 @@ function renderChatActions(action) {
     return;
   }
 
+  if (action.intent === "file_generation_intent") {
+    pendingProjectDescription = action.suggestedProjectDescription || action.updatedIdea || action.updatedRequirements || pendingProjectDescription;
+    addChatActionButton("Generate Project", () => applyChatGenerate(action));
+  }
   if (action.intent === "planning_intent" && (action.updatedIdea || action.updatedRequirements)) {
     addChatActionButton("Use as Project Description", () => applyChatIdea(action));
   }
@@ -990,7 +1028,7 @@ function renderChatActions(action) {
     addChatActionButton(confirmLabel, () => applyChatAction(action));
     addChatActionButton("Cancel", cancelChatAction, "ghost-button");
   }
-  if (action.intent === "file_generation_intent" && action.needsConfirmation) {
+  if (action.intent === "file_generation_intent" && action.needsConfirmation && currentPreview) {
     addChatActionButton("Add To Current Project", () => applyChatAction(action));
     addChatActionButton("Cancel", cancelChatAction, "ghost-button");
   }
@@ -1108,6 +1146,17 @@ async function applyChatRemoveFiles(action) {
 }
 
 async function applyChatGenerate(action) {
+  if (action.intent === "file_generation_intent") {
+    const description = action.suggestedProjectDescription || action.updatedIdea || action.updatedRequirements || pendingProjectDescription || chatInput.value.trim();
+    if (description) {
+      pendingProjectDescription = description;
+      action = {
+        ...action,
+        updatedIdea: description,
+        updatedRequirements: action.updatedRequirements || description,
+      };
+    }
+  }
   applyChatIdea(action);
   await generateFromChat(action);
 }
@@ -1131,7 +1180,7 @@ async function applyChatStack(action) {
 }
 
 function mergeChatActionState(action) {
-  const nextIdea = action.updatedIdea || baseIdea || ideaInput.value.trim();
+  const nextIdea = action.updatedIdea || baseIdea || ideaInput.value.trim() || pendingProjectDescription;
   const nextRequirements = action.updatedRequirements || finalRequirements || nextIdea;
   resetProjectContractStateForNewIdea(nextIdea);
   if (nextIdea) {
@@ -1181,6 +1230,12 @@ function removeManifestFiles(files, removals) {
 async function generateFromChat(action, options = {}) {
   if (!options.alreadyMerged) {
     mergeChatActionState(action);
+  }
+  if (!baseIdea && pendingProjectDescription) {
+    baseIdea = pendingProjectDescription;
+    ideaInput.value = pendingProjectDescription;
+    finalRequirements = finalRequirements || pendingProjectDescription;
+    chatFinalRequirements = chatFinalRequirements || pendingProjectDescription;
   }
   if (!baseIdea) {
     setStatus("Chat did not provide a project idea to generate.", "error");
@@ -1619,6 +1674,7 @@ function resetAll() {
   chatRequestedFiles = [];
   chatFilesToRemove = [];
   chatUpdatedStack = null;
+  pendingProjectDescription = "";
   chatMode = "idea_discussion";
   chatLinkedPreviewId = "";
   pendingAgentUpdate = null;

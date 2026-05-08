@@ -1347,6 +1347,56 @@ class AgentControllerTests(unittest.TestCase):
         self.assertFalse(payload["shouldRegenerate"])
         self.assertEqual(payload["requestedFiles"], [])
         self.assertEqual(payload["filesToRemove"], [])
+        self.assertEqual(payload["message"], payload["reply"])
+
+    def test_chat_explain_recursion_answers_without_project_lock(self) -> None:
+        response = self.client.post(
+            "/api/agent/chat",
+            json={
+                "message": "Explain recursion",
+                "currentIdea": "",
+                "currentPreview": {},
+                "selectedStack": {},
+                "agentState": "idle",
+                "llmMode": "free_rule_based",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["intent"], "chat_intent")
+        self.assertFalse(payload["shouldGenerate"])
+        self.assertNotIn("No project is locked in yet", payload["reply"])
+        self.assertTrue(payload["reply"])
+
+    def test_chat_login_webpage_generates_code_without_locked_project(self) -> None:
+        message = (
+            "generate me a webpage that should show me the login page and the user id is ashok "
+            "and the password is Ashok@123 after opening it should come like congratulations "
+            "with beautiful font and tags"
+        )
+        response = self.client.post(
+            "/api/agent/chat",
+            json={
+                "message": message,
+                "currentIdea": "",
+                "currentPreview": {},
+                "selectedStack": {},
+                "agentState": "idle",
+                "llmMode": "free_rule_based",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["intent"], "file_generation_intent")
+        self.assertIn(payload["action"], {"show_code_in_chat", "ask_generate_zip"})
+        self.assertFalse(payload["shouldGenerate"])
+        self.assertIn("```html", payload["reply"])
+        self.assertIn("Ashok@123", payload["reply"])
+        self.assertIn("Congratulations", payload["reply"])
+        self.assertEqual(payload["suggestedProjectDescription"], message)
+        self.assertNotIn("No project is locked in yet", payload["reply"])
 
     def test_chat_stack_suggestion_is_planning_not_generation(self) -> None:
         response = self.client.post(
@@ -1904,6 +1954,10 @@ class AgentControllerTests(unittest.TestCase):
         self.assertIn("No missing required files", script)
         self.assertIn("renderSafeMarkdown", script)
         self.assertIn("bubble.innerHTML = renderSafeMarkdown", script)
+        self.assertIn("enhanceCodeBlocks", script)
+        self.assertIn("copy-code-button", script)
+        self.assertIn("pendingProjectDescription", script)
+        self.assertIn('action.intent === "file_generation_intent"', script)
         self.assertIn('action.intent === "generation_intent"', script)
         self.assertIn('action.intent === "repair_intent"', script)
         self.assertIn('action.intent === "planning_intent"', script)
@@ -1911,6 +1965,8 @@ class AgentControllerTests(unittest.TestCase):
         self.assertIn(".chat-message pre", styles)
         corrections_body = script.split("async function applyChatCorrections", 1)[1].split("async function applyChatRemoveFiles", 1)[0]
         self.assertNotIn("await generateFromChat", corrections_body)
+        request_chat_body = script.split("async function requestChat", 1)[1].split("function appendChatMessage", 1)[0]
+        self.assertNotIn("requestPreview(", request_chat_body)
 
     def test_preview_includes_project_contract_and_validation_status(self) -> None:
         response = self.client.post(
